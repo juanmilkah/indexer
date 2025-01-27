@@ -61,19 +61,6 @@ fn main() {
             1,
             "Richard Stallman to visit Australia Im not usually one to promote events and the like unless I feel there is a genuine benefit to be had by attending but this is one stands out Richard M Stallman the guru of Free Software is coming Down Under to hold a talk You can read about him here Open Source Celebrity to visit Australia".to_string(),
 
-
-
-
-
-
-
-
-
-
-
-
-
-
         ),
         (
             2,
