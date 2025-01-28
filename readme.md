@@ -15,3 +15,6 @@ Searching
 ```bash
 indexer search index.json "foo bar baz"
 ```
+
+## Licensing
+The project is licensed under the [GPL3 License](LICENSE)
