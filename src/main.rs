@@ -17,9 +17,7 @@ struct VectorCompare;
 
 impl VectorCompare {
     // count of every word that occurs in a document
-    fn concodance(&self, tokens: &[String], mut map: DocIndex) -> DocIndex {
-        // let tokens: Vec<String> = Lexer::new().parse(document);
-
+    fn concodance(&self, tokens: &[String], map: &mut DocIndex) -> DocIndex {
         for token in tokens {
             let token = token.trim_ascii();
             let mut count: f32 = *map.entry(token.to_string()).or_insert(0.0);
@@ -28,7 +26,7 @@ impl VectorCompare {
             map.insert(token.to_string(), count);
         }
 
-        map
+        map.clone()
     }
 
     fn magnitude(&self, concodance: &DocIndex) -> f32 {
@@ -62,24 +60,23 @@ impl VectorCompare {
 }
 
 struct Lexer {
-    input: String,
+    input: Vec<char>,
     position: usize,
 }
 
 impl Lexer {
     fn new(input: &str) -> Self {
         Self {
-            input: input.to_lowercase(),
+            input: input.to_lowercase().chars().collect(),
             position: 0,
         }
     }
 
     fn parse(&mut self) -> Vec<String> {
         let mut tokens = Vec::new();
-        let chars: Vec<char> = self.input.chars().collect();
 
-        while self.position < chars.len() {
-            let current = chars[self.position];
+        while self.position < self.input.len() {
+            let current = self.input[self.position];
             let start = self.position;
 
             if current == '\n' || !current.is_ascii_alphanumeric() {
@@ -88,14 +85,16 @@ impl Lexer {
             }
 
             if current.is_ascii_alphanumeric() {
-                while self.position < chars.len() && chars[self.position].is_ascii_alphanumeric() {
+                while self.position < self.input.len()
+                    && self.input[self.position].is_ascii_alphanumeric()
+                {
                     self.position += 1;
                 }
             } else {
                 self.position += 1;
             }
 
-            let token: String = chars[start..self.position].iter().collect();
+            let token: String = self.input[start..self.position].iter().collect();
 
             if !token.is_empty() {
                 tokens.push(token);
@@ -103,6 +102,20 @@ impl Lexer {
         }
 
         tokens
+    }
+
+    fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
+        let stop_words = stop_words::get(stop_words::LANGUAGE::English);
+        let mut cleaned = Vec::new();
+
+        for token in tokens {
+            if stop_words.contains(token) {
+                continue;
+            }
+            cleaned.push(token.to_string());
+        }
+
+        cleaned
     }
 }
 
@@ -172,8 +185,10 @@ fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
                 }
             };
 
-            let tokens = Lexer::new(&text).parse();
-            doc_index = v.concodance(&tokens, doc_index);
+            let mut lex = Lexer::new(&text);
+            let tokens = lex.parse();
+            let tokens = lex.remove_stop_words(&tokens);
+            doc_index = v.concodance(&tokens, &mut doc_index);
         }
 
         docs_index.insert(doc.clone(), doc_index);
@@ -194,7 +209,7 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     let docs_index: DocsIndex = serde_json::from_reader(file)?;
 
     let tokens = Lexer::new(term).parse();
-    let term_conc = v.concodance(&tokens, HashMap::new());
+    let term_conc = v.concodance(&tokens, &mut HashMap::new());
     for (doc_name, doc_index) in docs_index.iter() {
         let mut relation = v.relation(&term_conc, doc_index);
 

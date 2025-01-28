@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 lopdf = "0.35.0"
 serde_json = "1.0.137"
+stop-words = "0.8.1"
