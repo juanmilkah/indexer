@@ -4,6 +4,11 @@
 - Indexing pdf files in a directory  
 - Searching of terms
 
+## Building the binary(Linux-based-platforms)
+```bash
+bash build.sh
+```
+
 ## Usage
 
 Indexing 
