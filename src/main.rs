@@ -67,50 +67,57 @@ impl VectorCompare {
     }
 }
 
-struct Lexer {
-    input: Vec<char>,
-    position: usize,
+struct Lexer<'a> {
+    input: &'a [char],
 }
 
-impl Lexer {
-    fn new(input: &str) -> Self {
-        Self {
-            input: input.to_lowercase().chars().collect(),
-            position: 0,
+impl<'a> Lexer<'a> {
+    fn new(input: &'a [char]) -> Self {
+        Self { input }
+    }
+
+    fn trim_left(&mut self) {
+        while !self.input.is_empty() && self.input[0].is_whitespace() {
+            self.input = &self.input[1..];
         }
     }
 
-    fn parse(&mut self) -> Vec<String> {
-        let mut tokens = Vec::new();
+    fn chop(&mut self, n: usize) -> &'a [char] {
+        let token = &self.input[0..n];
+        self.input = &self.input[n..];
+        token
+    }
 
-        while self.position < self.input.len() {
-            let current = self.input[self.position];
-            let start = self.position;
-
-            if current == '\n' || !current.is_ascii_alphanumeric() {
-                self.position += 1;
-                continue;
-            }
-
-            if current.is_ascii_alphanumeric() {
-                while self.position < self.input.len()
-                    && self.input[self.position].is_ascii_alphanumeric()
-                {
-                    self.position += 1;
-                }
-            } else {
-                self.position += 1;
-            }
-
-            let token: String = self.input[start..self.position].iter().collect();
-
-            if !token.is_empty() {
-                let stemmed_token = self.stem_token(&token);
-                tokens.push(stemmed_token);
-            }
+    fn chop_while<P>(&mut self, mut predicate: P) -> &'a [char]
+    where
+        P: FnMut(&char) -> bool,
+    {
+        let mut n = 0;
+        while n < self.input.len() && predicate(&self.input[n]) {
+            n += 1;
         }
 
-        tokens
+        self.chop(n)
+    }
+
+    fn next_token(&mut self) -> Option<String> {
+        self.trim_left();
+
+        if self.input.is_empty() {
+            return None;
+        }
+
+        if self.input[0].is_numeric() {
+            return Some(self.chop_while(|x| x.is_numeric()).iter().collect());
+        }
+
+        if self.input[0].is_alphabetic() {
+            let term: String = self.chop_while(|x| x.is_alphanumeric()).iter().collect();
+
+            let stemmed_token = self.stem_token(&term);
+            return Some(stemmed_token);
+        }
+        Some(self.chop(1).iter().collect())
     }
 
     fn stem_token(&self, token: &str) -> String {
@@ -130,6 +137,14 @@ impl Lexer {
         }
 
         cleaned
+    }
+}
+
+impl Iterator for Lexer<'_> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_token()
     }
 }
 
@@ -250,9 +265,18 @@ fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::
         for i in 1..end {
             if let Some(page) = document.get_page(i) {
                 if let Some(text) = page.get_text() {
-                    let mut lex = Lexer::new(text);
-                    let tokens = lex.parse();
-                    let tokens = lex.remove_stop_words(&tokens);
+                    let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
+                    let mut tokens = Vec::new();
+                    {
+                        let mut lex = Lexer::new(&text_chars);
+
+                        while let Some(token) = lex.next() {
+                            let token = lex.stem_token(&token);
+                            tokens.push(token);
+                        }
+
+                        tokens = lex.remove_stop_words(&tokens);
+                    }
                     doc_index = v.concodance(&tokens, &mut doc_index);
                 }
             }
@@ -264,7 +288,7 @@ fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::
 
     println!("Writing into {index_path}...");
     let file = BufWriter::new(File::create(index_path)?);
-    serde_json::to_writer(file, &docs_index)?;
+    serde_json::to_writer_pretty(file, &docs_index)?;
     Ok(())
 }
 
@@ -274,12 +298,16 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     let file = BufReader::new(File::open(index_file)?);
     let docs_index: DocsIndex = serde_json::from_reader(file)?;
 
-    let mut lex = Lexer::new(term);
-    let tokens = lex
-        .parse()
-        .iter()
-        .map(|t| lex.stem_token(t))
-        .collect::<Vec<String>>();
+    let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
+    let mut lex = Lexer::new(&text_chars);
+    let mut tokens = Vec::new();
+
+    while let Some(token) = lex.next() {
+        let token = lex.stem_token(&token);
+        tokens.push(token);
+    }
+
+    let tokens = lex.remove_stop_words(&tokens);
 
     let term_conc = v.concodance(&tokens, &mut HashMap::new());
     for (doc_name, doc_index) in docs_index.iter() {
