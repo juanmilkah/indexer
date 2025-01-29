@@ -3,7 +3,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 
-use lopdf::Document;
+use poppler::PopplerDocument;
 
 enum Commands {
     Search { index_file: String, term: String },
@@ -154,25 +154,28 @@ fn main() -> io::Result<()> {
             }
         },
         Ok(None) => return Ok(()),
-        Err(err) => return Err(err),
+        Err(()) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Failed to parse arguments",
+            ));
+        }
     };
 
     Ok(())
 }
 
-fn entry() -> io::Result<Option<Commands>> {
+fn entry() -> Result<Option<Commands>, ()> {
     let mut args = env::args();
 
-    if args.len() < 2 {
-        if let Some(program) = args.next() {
-            usage(&program);
-        };
-
-        return Ok(None);
-    }
     let program = args.next().unwrap_or("indexer".to_string());
 
-    match args.next().unwrap().as_str() {
+    let subcommand = args.next().ok_or_else(|| {
+        eprintln!("Failed to parse subcommand");
+        usage(&program);
+    })?;
+
+    match subcommand.as_str() {
         "search" => {
             if let Some(index_file) = args.next() {
                 if let Some(term) = args.next() {
@@ -202,7 +205,8 @@ fn entry() -> io::Result<Option<Commands>> {
 }
 
 fn usage(program: &str) {
-    println!("USAGE: {program}");
+    println!("USAGE: {program} [SUBCOMMAND] [OPTIONS]");
+    println!("SubCommands:");
     println!("\tsearch <index> <term>       Search for a term in documents");
     println!("\tindex <directory>           Create an index from a directory");
 }
@@ -213,7 +217,7 @@ fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
 
     for doc in docs.iter() {
         println!("Indexing document: {doc}");
-        let document = match Document::load(doc) {
+        let document = match PopplerDocument::new_from_file(doc, None) {
             Ok(doc) => doc,
             Err(err) => {
                 eprintln!("Failed to load document: {err}");
@@ -222,21 +226,17 @@ fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
         };
 
         let mut doc_index = HashMap::new();
-        let end = document.get_pages().len() as u32;
+        let end = document.get_n_pages();
 
         for i in 1..end {
-            let text = match document.extract_text(&[i]) {
-                Ok(val) => val,
-                Err(err) => {
-                    eprintln!("Failed to extract text from document: {err}");
-                    continue;
+            if let Some(page) = document.get_page(i) {
+                if let Some(text) = page.get_text() {
+                    let mut lex = Lexer::new(text);
+                    let tokens = lex.parse();
+                    let tokens = lex.remove_stop_words(&tokens);
+                    doc_index = v.concodance(&tokens, &mut doc_index);
                 }
-            };
-
-            let mut lex = Lexer::new(&text);
-            let tokens = lex.parse();
-            let tokens = lex.remove_stop_words(&tokens);
-            doc_index = v.concodance(&tokens, &mut doc_index);
+            }
         }
 
         docs_index.insert(doc.clone(), doc_index);

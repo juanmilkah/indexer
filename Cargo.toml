@@ -1,9 +1,12 @@
 [package]
 name = "indexer"
+description = "An indexer and search engine for local directories"
 version = "0.1.0"
 edition = "2024"
+authors = ["Juan Milkah <juanmilkah@gmail.com>"]
+license = "GNU/GPL3"
 
 [dependencies]
-lopdf = "0.35.0"
+poppler = "0.6.0"
 serde_json = "1.0.137"
 stop-words = "0.8.1"
