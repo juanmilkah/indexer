@@ -122,7 +122,7 @@ impl Lexer {
 fn main() -> io::Result<()> {
     let v = VectorCompare;
     match entry() {
-        Ok(val) => match val {
+        Ok(Some(val)) => match val {
             Commands::Index { files_dir } => {
                 let docs = fs::read_dir(&files_dir)?
                     .map(|entry| entry.unwrap().path().to_string_lossy().to_string())
@@ -153,10 +153,58 @@ fn main() -> io::Result<()> {
                 }
             }
         },
+        Ok(None) => return Ok(()),
         Err(err) => return Err(err),
     };
 
     Ok(())
+}
+
+fn entry() -> io::Result<Option<Commands>> {
+    let mut args = env::args();
+
+    if args.len() < 2 {
+        if let Some(program) = args.next() {
+            usage(&program);
+        };
+
+        return Ok(None);
+    }
+    let program = args.next().unwrap_or("indexer".to_string());
+
+    match args.next().unwrap().as_str() {
+        "search" => {
+            if let Some(index_file) = args.next() {
+                if let Some(term) = args.next() {
+                    Ok(Some(Commands::Search { term, index_file }))
+                } else {
+                    usage(&program);
+                    Ok(None)
+                }
+            } else {
+                usage(&program);
+                Ok(None)
+            }
+        }
+        "index" => {
+            if let Some(dir) = args.next() {
+                Ok(Some(Commands::Index { files_dir: dir }))
+            } else {
+                usage(&program);
+                Ok(None)
+            }
+        }
+        _ => {
+            usage(&program);
+            Ok(None)
+        }
+    }
+}
+
+fn usage(program: &str) {
+    println!("USAGE: {program}");
+    println!("\tsearch <index> <term>       Search for a term in documents");
+    println!("\tindex <directory>           Create an index from a directory");
 }
 
 fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
@@ -222,62 +270,4 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     matches.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     matches.reverse();
     Ok(matches)
-}
-
-fn entry() -> io::Result<Commands> {
-    let mut args = env::args();
-
-    if args.len() < 2 {
-        if let Some(program) = args.next() {
-            usage(&program);
-        };
-
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Missing some Arguments",
-        ));
-    }
-    let program = args.next().expect("Failed to parse program name");
-
-    match args.next().unwrap().as_str() {
-        "search" => {
-            if let Some(index_file) = args.next() {
-                if let Some(term) = args.next() {
-                    Ok(Commands::Search { term, index_file })
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Missing Search Term",
-                    ))
-                }
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Missing index file",
-                ))
-            }
-        }
-        "index" => {
-            if let Some(dir) = args.next() {
-                Ok(Commands::Index { files_dir: dir })
-            } else {
-                usage(&program);
-
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Missing Directory",
-                ))
-            }
-        }
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Missing some Arguments",
-        )),
-    }
-}
-
-fn usage(program: &str) {
-    println!("USAGE: {program}");
-    println!("\tsearch <index> <term>       Search for a term in documents");
-    println!("\tindex <directory>           Create an index from a directory");
 }
