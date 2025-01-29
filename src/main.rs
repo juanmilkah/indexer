@@ -1,17 +1,24 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
+use std::path::{Path, PathBuf};
 
 use poppler::PopplerDocument;
 
 enum Commands {
-    Search { index_file: String, term: String },
-    Index { files_dir: String },
+    Search {
+        index_file: String,
+        term: String,
+    },
+    Index {
+        files_dir: String,
+        index_path: String,
+    },
 }
 
-type DocsIndex = HashMap<String, DocIndex>;
-type DocIndex = HashMap<String, f32>;
+type DocsIndex = BTreeMap<String, DocIndex>;
+type DocIndex = BTreeMap<String, f32>;
 
 struct VectorCompare;
 
@@ -123,12 +130,14 @@ fn main() -> io::Result<()> {
     let v = VectorCompare;
     match entry() {
         Ok(Some(val)) => match val {
-            Commands::Index { files_dir } => {
-                let docs = fs::read_dir(&files_dir)?
-                    .map(|entry| entry.unwrap().path().to_string_lossy().to_string())
-                    .collect::<Vec<String>>();
+            Commands::Index {
+                files_dir,
+                index_path,
+            } => {
+                let files_dir = PathBuf::from(files_dir);
+                let docs = read_files_recursively(&files_dir)?;
 
-                if index_documents(&v, &docs).is_err() {
+                if index_documents(&v, &docs, &index_path).is_err() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Failed to build Index",
@@ -148,7 +157,7 @@ fn main() -> io::Result<()> {
                     return Ok(());
                 }
 
-                for m in term_matches.iter().take(10) {
+                for m in term_matches.iter() {
                     println!("{}: \t{}", m.0, m.1);
                 }
             }
@@ -157,7 +166,7 @@ fn main() -> io::Result<()> {
         Err(()) => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Failed to parse arguments",
+                "Missing Some Arguments",
             ));
         }
     };
@@ -166,54 +175,57 @@ fn main() -> io::Result<()> {
 }
 
 fn entry() -> Result<Option<Commands>, ()> {
-    let mut args = env::args();
+    let mut args = env::args().skip(1).peekable();
 
-    let program = args.next().unwrap_or("indexer".to_string());
-
-    let subcommand = args.next().ok_or_else(|| {
-        eprintln!("Failed to parse subcommand");
-        usage(&program);
-    })?;
-
-    match subcommand.as_str() {
-        "search" => {
-            if let Some(index_file) = args.next() {
-                if let Some(term) = args.next() {
-                    Ok(Some(Commands::Search { term, index_file }))
+    if let Some(subcommand) = args.next() {
+        match subcommand.as_str() {
+            "search" => {
+                if let Some(index_file) = args.next() {
+                    if let Some(term) = args.next() {
+                        Ok(Some(Commands::Search { term, index_file }))
+                    } else {
+                        usage();
+                        Ok(None)
+                    }
                 } else {
-                    usage(&program);
+                    usage();
                     Ok(None)
                 }
-            } else {
-                usage(&program);
-                Ok(None)
             }
-        }
-        "index" => {
-            if let Some(dir) = args.next() {
-                Ok(Some(Commands::Index { files_dir: dir }))
-            } else {
-                usage(&program);
-                Ok(None)
+            "index" => {
+                if let Some(dir) = args.next() {
+                    if let Some(index) = args.next() {
+                        Ok(Some(Commands::Index {
+                            files_dir: dir,
+                            index_path: index,
+                        }))
+                    } else {
+                        usage();
+                        Ok(None)
+                    }
+                } else {
+                    usage();
+                    Ok(None)
+                }
             }
+            _ => Ok(None),
         }
-        _ => {
-            usage(&program);
-            Ok(None)
-        }
+    } else {
+        usage();
+        return Ok(None);
     }
 }
 
-fn usage(program: &str) {
-    println!("USAGE: {program} [SUBCOMMAND] [OPTIONS]");
+fn usage() {
+    println!("USAGE: [PROGRAM] [SUBCOMMAND] [OPTIONS]");
     println!("SubCommands:");
-    println!("\tsearch <index> <term>       Search for a term in documents");
-    println!("\tindex <directory>           Create an index from a directory");
+    println!("\tsearch <index_path> <term>       Search for a term in documents");
+    println!("\tindex <directory> <index_path>   Create an index from a directory");
 }
 
-fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
+fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::Result<()> {
     //build the index
-    let mut docs_index = HashMap::new();
+    let mut docs_index = BTreeMap::new();
 
     for doc in docs.iter() {
         println!("Indexing document: {doc}");
@@ -225,7 +237,7 @@ fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
             }
         };
 
-        let mut doc_index = HashMap::new();
+        let mut doc_index = BTreeMap::new();
         let end = document.get_n_pages();
 
         for i in 1..end {
@@ -243,9 +255,8 @@ fn index_documents(v: &VectorCompare, docs: &[String]) -> io::Result<()> {
     }
     println!("Completed Indexing!");
 
-    let file = BufWriter::new(File::create("index.json")?);
-    println!("Writing into Index.json...");
-
+    println!("Writing into {index_path}...");
+    let file = BufWriter::new(File::create(index_path)?);
     serde_json::to_writer(file, &docs_index)?;
     Ok(())
 }
@@ -257,12 +268,12 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     let docs_index: DocsIndex = serde_json::from_reader(file)?;
 
     let tokens = Lexer::new(term).parse();
-    let term_conc = v.concodance(&tokens, &mut HashMap::new());
+    let term_conc = v.concodance(&tokens, &mut BTreeMap::new());
     for (doc_name, doc_index) in docs_index.iter() {
-        let mut relation = v.relation(&term_conc, doc_index);
+        let relation = v.relation(&term_conc, doc_index);
 
         if relation != 0.0 {
-            relation = relation.log10().abs();
+            // relation = relation.log10().abs();
             matches.push((relation, doc_name.clone()));
         }
     }
@@ -270,4 +281,24 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     matches.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     matches.reverse();
     Ok(matches)
+}
+
+fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
+    let mut files = Vec::new();
+
+    if files_dir.is_dir() {
+        for entry in fs::read_dir(files_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                let mut subdir_files = read_files_recursively(&path)?;
+                files.append(&mut subdir_files);
+            } else {
+                files.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    Ok(files)
 }
