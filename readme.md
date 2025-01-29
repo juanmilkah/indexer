@@ -20,12 +20,12 @@ bash build.sh
 
 Indexing 
 ```bash
-indexer index <path_to_document_directory>
+indexer index <path_to_documents_directory> <path_to_index_file>
 ```
 
 Searching
 ```bash
-indexer search <path_to_index.json> "foo bar baz"
+indexer search <path_to_index.json> <query>
 ```
 
 ## Licensing
