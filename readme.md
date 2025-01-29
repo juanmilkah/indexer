@@ -5,6 +5,13 @@
 - Searching of terms
 
 ## Building the binary(Linux-based-platforms)
+You may need `libpoppler-glib` installed on you system.  
+For arch users  
+
+```bash
+sudo pacman -S poppler-glib
+```
+
 ```bash
 bash build.sh
 ```
