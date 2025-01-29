@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 use poppler::PopplerDocument;
+use rust_stemmers::{Algorithm, Stemmer};
 
 enum Commands {
     Search {
@@ -17,8 +18,8 @@ enum Commands {
     },
 }
 
-type DocsIndex = BTreeMap<String, DocIndex>;
-type DocIndex = BTreeMap<String, f32>;
+type DocsIndex = HashMap<String, DocIndex>;
+type DocIndex = HashMap<String, f32>;
 
 struct VectorCompare;
 
@@ -104,11 +105,17 @@ impl Lexer {
             let token: String = self.input[start..self.position].iter().collect();
 
             if !token.is_empty() {
-                tokens.push(token);
+                let stemmed_token = self.stem_token(&token);
+                tokens.push(stemmed_token);
             }
         }
 
         tokens
+    }
+
+    fn stem_token(&self, token: &str) -> String {
+        let stemmer = Stemmer::create(Algorithm::English);
+        stemmer.stem(&token).to_string()
     }
 
     fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
@@ -225,7 +232,7 @@ fn usage() {
 
 fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::Result<()> {
     //build the index
-    let mut docs_index = BTreeMap::new();
+    let mut docs_index = HashMap::new();
 
     for doc in docs.iter() {
         println!("Indexing document: {doc}");
@@ -237,7 +244,7 @@ fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::
             }
         };
 
-        let mut doc_index = BTreeMap::new();
+        let mut doc_index = HashMap::new();
         let end = document.get_n_pages();
 
         for i in 1..end {
@@ -267,8 +274,14 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     let file = BufReader::new(File::open(index_file)?);
     let docs_index: DocsIndex = serde_json::from_reader(file)?;
 
-    let tokens = Lexer::new(term).parse();
-    let term_conc = v.concodance(&tokens, &mut BTreeMap::new());
+    let mut lex = Lexer::new(term);
+    let tokens = lex
+        .parse()
+        .iter()
+        .map(|t| lex.stem_token(t))
+        .collect::<Vec<String>>();
+
+    let term_conc = v.concodance(&tokens, &mut HashMap::new());
     for (doc_name, doc_index) in docs_index.iter() {
         let relation = v.relation(&term_conc, doc_index);
 
