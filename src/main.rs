@@ -1,8 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
@@ -18,8 +20,29 @@ enum Commands {
     },
 }
 
-type DocsIndex = HashMap<String, DocIndex>;
 type DocIndex = HashMap<String, f32>;
+
+#[derive(Serialize, Deserialize)]
+struct IndexTable {
+    docs_count: u64,
+    tables: HashMap<String, DocTable>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DocTable {
+    indexed_at: SystemTime,
+    word_count: u64,
+    doc_index: DocIndex,
+}
+
+impl IndexTable {
+    fn new() -> Self {
+        Self {
+            docs_count: 0,
+            tables: HashMap::new(),
+        }
+    }
+}
 
 struct VectorCompare;
 
@@ -197,8 +220,9 @@ fn usage() {
     println!("\tindex <directory> <index_path>   Create an index from a directory");
 }
 
-fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocIndex> {
+fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
     println!("Indexing document: {filepath}");
+    let indexed_at = SystemTime::now();
     let document = match PopplerDocument::new_from_file(filepath, None) {
         Ok(doc) => doc,
         Err(err) => {
@@ -210,7 +234,7 @@ fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocIndex>
         }
     };
 
-    let mut doc_index = HashMap::new();
+    let mut doc_index: DocIndex = HashMap::new();
     let end = document.get_n_pages();
 
     for i in 1..end {
@@ -232,15 +256,20 @@ fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocIndex>
             }
         }
     }
+    let doc_table = DocTable {
+        indexed_at,
+        word_count: doc_index.keys().len() as u64,
+        doc_index,
+    };
 
-    Ok(doc_index)
+    Ok(doc_table)
 }
 
 fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<(f32, String)>> {
     let mut matches = Vec::new();
 
     let file = BufReader::new(File::open(index_file)?);
-    let docs_index: DocsIndex = serde_json::from_reader(file)?;
+    let index_table: IndexTable = serde_json::from_reader(file)?;
 
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&text_chars);
@@ -254,8 +283,8 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
     let tokens = lex.remove_stop_words(&tokens);
 
     let term_conc = v.concodance(&tokens, &mut HashMap::new());
-    for (doc_name, doc_index) in docs_index.iter() {
-        let relation = v.relation(&term_conc, doc_index);
+    for (doc_name, doc_table) in index_table.tables.iter() {
+        let relation = v.relation(&term_conc, &doc_table.doc_index);
 
         if relation != 0.0 {
             // relation = relation.log10().abs();
@@ -298,14 +327,17 @@ fn main() -> io::Result<()> {
             } => {
                 let files_dir = PathBuf::from(files_dir);
                 let docs = read_files_recursively(&files_dir)?;
-                let mut docs_index = HashMap::new();
+                let mut index_table = IndexTable::new();
 
                 'classify: for doc in docs {
                     let doc_extension = Path::new(&doc).extension();
                     match doc_extension {
                         Some(ext) => match ext.to_str().unwrap() {
                             "pdf" => match index_pdf_document(&v, &doc) {
-                                Ok(doc_index) => docs_index.insert(doc, doc_index),
+                                Ok(doc_table) => {
+                                    index_table.docs_count += 1;
+                                    index_table.tables.insert(doc, doc_table);
+                                }
                                 Err(err) => {
                                     eprintln!("Failed to index {doc}: {err}");
                                     continue 'classify;
@@ -318,9 +350,10 @@ fn main() -> io::Result<()> {
                     };
                 }
 
+                println!("Indexed {count} documents!", count = index_table.docs_count);
                 println!("Writing into {index_path}...");
                 let file = BufWriter::new(File::create(index_path)?);
-                serde_json::to_writer(file, &docs_index)?;
+                serde_json::to_writer(file, &index_table)?;
             }
             Commands::Search { index_file, term } => {
                 let term_matches = match search_term(&v, &term, &index_file) {

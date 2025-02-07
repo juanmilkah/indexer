@@ -173,6 +173,7 @@ version = "0.1.0"
 dependencies = [
  "poppler",
  "rust-stemmers",
+ "serde",
  "serde_json",
  "stop-words",
 ]
