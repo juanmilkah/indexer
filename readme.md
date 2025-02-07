@@ -1,4 +1,4 @@
-# Search Engine
+# Vector-Space Search Engine
 
 ## Features
 - Indexing pdf files in a directory  

@@ -122,7 +122,7 @@ impl<'a> Lexer<'a> {
 
     fn stem_token(&self, token: &str) -> String {
         let stemmer = Stemmer::create(Algorithm::English);
-        stemmer.stem(&token).to_string()
+        stemmer.stem(token).to_string()
     }
 
     fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
@@ -146,54 +146,6 @@ impl Iterator for Lexer<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
     }
-}
-
-fn main() -> io::Result<()> {
-    let v = VectorCompare;
-    match entry() {
-        Ok(Some(val)) => match val {
-            Commands::Index {
-                files_dir,
-                index_path,
-            } => {
-                let files_dir = PathBuf::from(files_dir);
-                let docs = read_files_recursively(&files_dir)?;
-
-                if index_documents(&v, &docs, &index_path).is_err() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Failed to build Index",
-                    ));
-                }
-            }
-            Commands::Search { index_file, term } => {
-                let term_matches = match search_term(&v, &term, &index_file) {
-                    Ok(val) => val,
-                    Err(err) => {
-                        return Err(err);
-                    }
-                };
-
-                if term_matches.is_empty() {
-                    println!("No Matches!");
-                    return Ok(());
-                }
-
-                for m in term_matches.iter() {
-                    println!("{}: \t{}", m.0, m.1);
-                }
-            }
-        },
-        Ok(None) => return Ok(()),
-        Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Missing Some Arguments",
-            ));
-        }
-    };
-
-    Ok(())
 }
 
 fn entry() -> Result<Option<Commands>, ()> {
@@ -234,7 +186,7 @@ fn entry() -> Result<Option<Commands>, ()> {
         }
     } else {
         usage();
-        return Ok(None);
+        Ok(None)
     }
 }
 
@@ -245,51 +197,43 @@ fn usage() {
     println!("\tindex <directory> <index_path>   Create an index from a directory");
 }
 
-fn index_documents(v: &VectorCompare, docs: &[String], index_path: &str) -> io::Result<()> {
-    //build the index
-    let mut docs_index = HashMap::new();
+fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocIndex> {
+    println!("Indexing document: {filepath}");
+    let document = match PopplerDocument::new_from_file(filepath, None) {
+        Ok(doc) => doc,
+        Err(err) => {
+            eprintln!("Failed to load document: {err}");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{err:?}"),
+            ));
+        }
+    };
 
-    for doc in docs.iter() {
-        println!("Indexing document: {doc}");
-        let document = match PopplerDocument::new_from_file(doc, None) {
-            Ok(doc) => doc,
-            Err(err) => {
-                eprintln!("Failed to load document: {err}");
-                continue;
-            }
-        };
+    let mut doc_index = HashMap::new();
+    let end = document.get_n_pages();
 
-        let mut doc_index = HashMap::new();
-        let end = document.get_n_pages();
+    for i in 1..end {
+        if let Some(page) = document.get_page(i) {
+            if let Some(text) = page.get_text() {
+                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
+                let mut tokens = Vec::new();
+                {
+                    let mut lex = Lexer::new(&text_chars);
 
-        for i in 1..end {
-            if let Some(page) = document.get_page(i) {
-                if let Some(text) = page.get_text() {
-                    let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
-                    let mut tokens = Vec::new();
-                    {
-                        let mut lex = Lexer::new(&text_chars);
-
-                        while let Some(token) = lex.next() {
-                            let token = lex.stem_token(&token);
-                            tokens.push(token);
-                        }
-
-                        tokens = lex.remove_stop_words(&tokens);
+                    while let Some(token) = lex.next() {
+                        let token = lex.stem_token(&token);
+                        tokens.push(token);
                     }
-                    doc_index = v.concodance(&tokens, &mut doc_index);
+
+                    tokens = lex.remove_stop_words(&tokens);
                 }
+                doc_index = v.concodance(&tokens, &mut doc_index);
             }
         }
-
-        docs_index.insert(doc.clone(), doc_index);
     }
-    println!("Completed Indexing!");
 
-    println!("Writing into {index_path}...");
-    let file = BufWriter::new(File::create(index_path)?);
-    serde_json::to_writer_pretty(file, &docs_index)?;
-    Ok(())
+    Ok(doc_index)
 }
 
 fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<(f32, String)>> {
@@ -342,4 +286,67 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
     }
 
     Ok(files)
+}
+
+fn main() -> io::Result<()> {
+    let v = VectorCompare;
+    match entry() {
+        Ok(Some(val)) => match val {
+            Commands::Index {
+                files_dir,
+                index_path,
+            } => {
+                let files_dir = PathBuf::from(files_dir);
+                let docs = read_files_recursively(&files_dir)?;
+                let mut docs_index = HashMap::new();
+
+                'classify: for doc in docs {
+                    let doc_extension = Path::new(&doc).extension();
+                    match doc_extension {
+                        Some(ext) => match ext.to_str().unwrap() {
+                            "pdf" => match index_pdf_document(&v, &doc) {
+                                Ok(doc_index) => docs_index.insert(doc, doc_index),
+                                Err(err) => {
+                                    eprintln!("Failed to index {doc}: {err}");
+                                    continue 'classify;
+                                }
+                            },
+                            _ => continue 'classify,
+                        },
+
+                        None => continue 'classify,
+                    };
+                }
+
+                println!("Writing into {index_path}...");
+                let file = BufWriter::new(File::create(index_path)?);
+                serde_json::to_writer(file, &docs_index)?;
+            }
+            Commands::Search { index_file, term } => {
+                let term_matches = match search_term(&v, &term, &index_file) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return Err(err);
+                    }
+                };
+
+                if term_matches.is_empty() {
+                    println!("No Matches!");
+                    return Ok(());
+                }
+
+                for m in term_matches.iter() {
+                    println!("{}: \t{}", m.0, m.1);
+                }
+            }
+        },
+        Ok(None) => return Ok(()),
+        Err(()) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Missing Some Arguments",
+            ));
+        }
+    };
+    Ok(())
 }
