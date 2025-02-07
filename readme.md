@@ -28,5 +28,15 @@ Searching
 indexer search <path_to_index.json> <query>
 ```
 
+Help page
+```bash
+indexer --help
+```
+
+Version Info
+```bash
+indexer --version
+```
+
 ## Licensing
 The project is licensed under the [GPL3 License](LICENSE)

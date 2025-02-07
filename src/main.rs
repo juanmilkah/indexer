@@ -18,6 +18,8 @@ enum Commands {
         files_dir: String,
         index_path: String,
     },
+    Help,
+    Version,
 }
 
 type DocIndex = HashMap<String, f32>;
@@ -205,6 +207,9 @@ fn entry() -> Result<Option<Commands>, ()> {
                     Ok(None)
                 }
             }
+
+            "help" | "--help" | "-h" => Ok(Some(Commands::Help)),
+            "version" | "--version" | "-v" => Ok(Some(Commands::Version)),
             _ => Ok(None),
         }
     } else {
@@ -317,6 +322,11 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
     Ok(files)
 }
 
+//fix this -->figure out how to read from the Cargo.toml file
+fn version_info() {
+    println!("INDEXER VERSION 0.1.0");
+}
+
 fn main() -> io::Result<()> {
     let v = VectorCompare;
     match entry() {
@@ -371,6 +381,14 @@ fn main() -> io::Result<()> {
                 for m in term_matches.iter() {
                     println!("{}: \t{}", m.0, m.1);
                 }
+            }
+            Commands::Help => {
+                usage();
+                return Ok(());
+            }
+            Commands::Version => {
+                version_info();
+                return Ok(());
             }
         },
         Ok(None) => return Ok(()),
