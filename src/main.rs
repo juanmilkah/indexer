@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
@@ -8,6 +7,7 @@ use std::time::SystemTime;
 
 use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
+use serde::{Deserialize, Serialize};
 
 enum Commands {
     Search {
