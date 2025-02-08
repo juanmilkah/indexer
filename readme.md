@@ -4,7 +4,8 @@
 - Indexing pdf files in a directory  
 - Searching of terms
 
-## Building the binary(Linux-based-platforms)
+## Installation
+
 You may need `libpoppler-glib` installed on you system.  
 For arch users  
 
@@ -13,27 +14,35 @@ sudo pacman -S poppler-glib
 ```
 
 ```bash
+git clone https://github.com/juanmilkah/indexer 
+cd indexer 
 bash build.sh
 ```
 
 ## Usage
 
-Indexing 
+- ### Indexing 
+If path to docs is not provided it falls back to the current directory.  
+If the path to index file is not specified the fallback is `index.json`.  
+Supported file types:  
+(pdf, txt, md)
+
 ```bash
-indexer index <path_to_documents_directory> <path_to_index_file>
+indexer index [path_to_documents_directory] [path_to_index_file]
 ```
 
-Searching
+
+- ### Searching
 ```bash
 indexer search <path_to_index.json> <query>
 ```
 
-Help page
+- ### Help page
 ```bash
 indexer --help
 ```
 
-Version Info
+- ### Version Info
 ```bash
 indexer --version
 ```
