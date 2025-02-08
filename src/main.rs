@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use std::{char, env};
 
 use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
@@ -192,6 +192,9 @@ fn entry() -> Result<Option<Commands>, ()> {
                 }
             }
             "index" => {
+                // index the provided directory and write the documents index table
+                // in the provided index file
+                // otherwise fall back to the current directory and index.json respectively
                 if let Some(dir) = args.next() {
                     if let Some(index) = args.next() {
                         Ok(Some(Commands::Index {
@@ -199,12 +202,16 @@ fn entry() -> Result<Option<Commands>, ()> {
                             index_path: index,
                         }))
                     } else {
-                        usage();
-                        Ok(None)
+                        Ok(Some(Commands::Index {
+                            files_dir: dir,
+                            index_path: "index.json".to_string(),
+                        }))
                     }
                 } else {
-                    usage();
-                    Ok(None)
+                    Ok(Some(Commands::Index {
+                        files_dir: ".".to_string(),
+                        index_path: "index.json".to_string(),
+                    }))
                 }
             }
 
@@ -219,10 +226,10 @@ fn entry() -> Result<Option<Commands>, ()> {
 }
 
 fn usage() {
-    println!("USAGE: [PROGRAM] [SUBCOMMAND] [OPTIONS]");
+    println!("USAGE: [PROGRAM] [COMMANDS] [OPTIONS]");
     println!("SubCommands:");
     println!("\tsearch <index_path> <term>       Search for a term in documents");
-    println!("\tindex <directory> <index_path>   Create an index from a directory");
+    println!("\tindex <directory> [index_path]   Create an index from a directory");
 }
 
 fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
@@ -270,6 +277,34 @@ fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable>
     Ok(doc_table)
 }
 
+fn index_text_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
+    println!("Indexing {filepath}...");
+    let indexed_at = SystemTime::now();
+    let content = match fs::read_to_string(filepath) {
+        Ok(val) => val,
+        Err(err) => {
+            eprintln!("Failed to read file {filepath}: {err}");
+            return Err(err);
+        }
+    };
+
+    let content = content.to_lowercase().chars().collect::<Vec<char>>();
+    let mut lex = Lexer::new(&content);
+    let mut tokens = Vec::new();
+    while let Some(token) = lex.next_token() {
+        tokens.push(token);
+    }
+
+    let tokens = lex.remove_stop_words(&tokens);
+    let doc_index = v.concodance(&tokens, &mut HashMap::new());
+
+    Ok(DocTable {
+        indexed_at,
+        word_count: doc_index.len() as u64,
+        doc_index,
+    })
+}
+
 fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<(f32, String)>> {
     let mut matches = Vec::new();
 
@@ -278,6 +313,7 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
 
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&text_chars);
+
     let mut tokens = Vec::new();
 
     while let Some(token) = lex.next() {
@@ -327,6 +363,12 @@ fn version_info() {
     println!("INDEXER VERSION 0.1.0");
 }
 
+fn get_index_table(filepath: &str) -> io::Result<IndexTable> {
+    let index_file = File::open(filepath)?;
+    let index_table: IndexTable = serde_json::from_reader(&index_file)?;
+    Ok(index_table)
+}
+
 fn main() -> io::Result<()> {
     let v = VectorCompare;
     match entry() {
@@ -337,33 +379,76 @@ fn main() -> io::Result<()> {
             } => {
                 let files_dir = PathBuf::from(files_dir);
                 let docs = read_files_recursively(&files_dir)?;
-                let mut index_table = IndexTable::new();
+                let mut index_table = match get_index_table(&index_path) {
+                    Ok(val) => val,
+                    Err(_) => IndexTable::new(),
+                };
 
-                'classify: for doc in docs {
+                let mut counter = 0;
+
+                for doc in docs {
+                    // check if document index exists in the index_table;
+                    // if it exixts, check whether the file has been modified
+                    // since the last index
+                    // if yes then reindex the file
+                    // if no then skip the file
+                    let now = SystemTime::now();
+                    if let Some(doc_table) = index_table.tables.get(&doc) {
+                        let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
+                        let elapsed_since_modified = now.duration_since(modified_at).unwrap();
+                        let elapsed_since_indexed =
+                            now.duration_since(doc_table.indexed_at).unwrap();
+
+                        if elapsed_since_indexed < elapsed_since_modified {
+                            println!("Skipped {doc}");
+                            continue;
+                        }
+                    }
+
+                    //match the document's file extension and index it accordingly
                     let doc_extension = Path::new(&doc).extension();
                     match doc_extension {
                         Some(ext) => match ext.to_str().unwrap() {
                             "pdf" => match index_pdf_document(&v, &doc) {
                                 Ok(doc_table) => {
                                     index_table.docs_count += 1;
+                                    counter += 1;
                                     index_table.tables.insert(doc, doc_table);
                                 }
                                 Err(err) => {
                                     eprintln!("Failed to index {doc}: {err}");
-                                    continue 'classify;
+                                    continue;
                                 }
                             },
-                            _ => continue 'classify,
+                            "txt" | "md" => match index_text_document(&v, &doc) {
+                                Ok(doc_table) => {
+                                    index_table.docs_count += 1;
+                                    counter += 1;
+                                    index_table.tables.insert(doc, doc_table);
+                                }
+                                Err(err) => {
+                                    eprintln!("Failed to index {doc}: {err}");
+                                    continue;
+                                }
+                            },
+                            _ => continue,
                         },
 
-                        None => continue 'classify,
+                        None => continue,
                     };
                 }
 
-                println!("Indexed {count} documents!", count = index_table.docs_count);
-                println!("Writing into {index_path}...");
-                let file = BufWriter::new(File::create(index_path)?);
-                serde_json::to_writer(file, &index_table)?;
+                // write the documents index_table in the provided file path
+                println!(
+                    "Indexed {counter} new document{}!",
+                    if counter == 1 { "" } else { "s" }
+                );
+
+                if counter != 0 {
+                    println!("Writing into {index_path}...");
+                    let file = BufWriter::new(File::create(index_path)?);
+                    serde_json::to_writer(file, &index_table)?;
+                }
             }
             Commands::Search { index_file, term } => {
                 let term_matches = match search_term(&v, &term, &index_file) {
