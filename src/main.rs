@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::{char, env};
 
+use home::home_dir;
 use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tiny_http::{Method, Response, Server};
 
 enum Commands {
     Search {
@@ -17,6 +20,9 @@ enum Commands {
     Index {
         files_dir: String,
         index_path: String,
+    },
+    Serve {
+        index_file: String,
     },
     Help,
     Version,
@@ -214,6 +220,15 @@ fn entry() -> Result<Option<Commands>, ()> {
                     }))
                 }
             }
+            //fix this later
+            "serve" => {
+                if let Some(index_file) = args.next() {
+                    Ok(Some(Commands::Serve { index_file }))
+                } else {
+                    eprintln!("Missing index file path");
+                    Ok(None)
+                }
+            }
 
             "help" | "--help" | "-h" => Ok(Some(Commands::Help)),
             "version" | "--version" | "-v" => Ok(Some(Commands::Version)),
@@ -230,6 +245,7 @@ fn usage() {
     println!("SubCommands:");
     println!("\tsearch <index_path> <term>       Search for a term in documents");
     println!("\tindex <directory> [index_path]   Create an index from a directory");
+    println!("\tserve <index_path>               Serve the responses to an http server");
 }
 
 fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
@@ -305,7 +321,7 @@ fn index_text_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable
     })
 }
 
-fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<(f32, String)>> {
+fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<String>> {
     let mut matches = Vec::new();
 
     let file = BufReader::new(File::open(index_file)?);
@@ -335,7 +351,8 @@ fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Ve
 
     matches.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     matches.reverse();
-    Ok(matches)
+    let result = matches.iter().map(|v| v.1.clone()).collect::<Vec<String>>();
+    Ok(result)
 }
 
 fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
@@ -367,6 +384,74 @@ fn get_index_table(filepath: &str) -> io::Result<IndexTable> {
     let index_file = File::open(filepath)?;
     let index_table: IndexTable = serde_json::from_reader(&index_file)?;
     Ok(index_table)
+}
+
+fn run_server(index_file: &str) {
+    let server = match Server::http("0.0.0.0:8080") {
+        Ok(val) => val,
+        Err(err) => {
+            eprintln!("Failed to bind server to port 8080: {err}");
+            return;
+        }
+    };
+    println!("Server listening on port 8080");
+
+    for mut request in server.incoming_requests() {
+        match &request.method() {
+            Method::Get => match request.url() {
+                "/" => {
+                    let html_file = home_dir()
+                        .unwrap_or(PathBuf::from("."))
+                        .join(".indexer")
+                        .join("index.html")
+                        .to_string_lossy()
+                        .to_string();
+                    let response = Response::from_file(File::open(&html_file).unwrap());
+                    let _ = request.respond(response);
+                }
+                _ => {
+                    let response = Response::from_string(format!(
+                        "Method not Allowed: {url}",
+                        url = request.url()
+                    ));
+                    let _ = request.respond(response);
+                }
+            },
+            Method::Post => match request.url() {
+                "/search" => {
+                    let v = VectorCompare;
+                    let mut body = String::new();
+                    let _ = &request.as_reader().read_to_string(&mut body);
+                    let json: Value = body.parse().unwrap();
+                    let query = json.get("query").unwrap().to_string();
+
+                    match search_term(&v, &query, index_file) {
+                        Ok(vals) => {
+                            let response = Response::from_string(vals.join("\n"));
+                            let _ = request.respond(response);
+                        }
+                        Err(err) => {
+                            let response =
+                                Response::from_string(format!("Failed to search for query: {err}"));
+                            let _ = request.respond(response);
+                        }
+                    };
+                }
+                _ => {
+                    let response =
+                        Response::from_string(format!("Invalid Url: {url}", url = request.url()));
+                    let _ = request.respond(response);
+                }
+            },
+            _ => {
+                let response = Response::from_string(format!(
+                    "Method Not Allowed: {method}",
+                    method = request.method()
+                ));
+                let _ = request.respond(response);
+            }
+        }
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -464,8 +549,12 @@ fn main() -> io::Result<()> {
                 }
 
                 for m in term_matches.iter() {
-                    println!("{}: \t{}", m.0, m.1);
+                    println!("{m}");
                 }
+            }
+            Commands::Serve { index_file } => {
+                run_server(&index_file);
+                return Ok(());
             }
             Commands::Help => {
                 usage();

@@ -37,6 +37,16 @@ indexer index [path_to_documents_directory] [path_to_index_file]
 indexer search <path_to_index.json> <query>
 ```
 
+### Serving via http server
+Localhost on port `8080`
+```bash
+indexer serve <path_to_index_file>
+```
+
+```bash
+http POST :8080/search query="foo bar baz"
+```
+
 - ### Help page
 ```bash
 indexer --help
