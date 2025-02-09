@@ -78,17 +78,17 @@ impl VectorCompare {
         total.sqrt()
     }
 
-    fn relation(&self, concodance_1: &DocIndex, concodance_2: &DocIndex) -> f32 {
+    fn relation(&self, minor_doc: &DocIndex, major_doc: &DocIndex) -> f32 {
         let mut top_value: f32 = 0.0;
 
-        for (word, count) in concodance_1.iter() {
-            if concodance_2.contains_key(word) {
-                top_value += count * concodance_2.get(word).unwrap();
+        for (word, count) in minor_doc.iter() {
+            if major_doc.contains_key(word) {
+                top_value += count * major_doc.get(word).unwrap();
             }
         }
 
-        let conc_1 = self.magnitude(concodance_1);
-        let conc_2 = self.magnitude(concodance_2);
+        let conc_1 = self.magnitude(minor_doc);
+        let conc_2 = self.magnitude(major_doc);
 
         if conc_1 * conc_2 != 0.0 {
             top_value / (conc_1 * conc_2)
