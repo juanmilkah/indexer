@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -157,11 +157,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
-        let stop_words = stop_words::get(stop_words::LANGUAGE::English);
+        let mut set = HashSet::new();
+        let _stop_words = stop_words::get(stop_words::LANGUAGE::English)
+            .into_iter()
+            .map(|word| set.insert(word));
         let mut cleaned = Vec::new();
 
         for token in tokens {
-            if stop_words.contains(token) {
+            if set.contains(token) {
                 continue;
             }
             cleaned.push(token.to_string());
