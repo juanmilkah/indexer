@@ -418,6 +418,10 @@ fn run_server(index_file: &str) {
                     let response = Response::from_file(File::open(&html_file).unwrap());
                     let _ = request.respond(response);
                 }
+                "/search" => {
+                    let response = Response::from_string("Use `POST` Method instead");
+                    let _ = request.respond(response.with_status_code(403));
+                }
                 _ => {
                     let response = Response::from_string(format!(
                         "Route not Allowed: {url}",
@@ -438,8 +442,13 @@ fn run_server(index_file: &str) {
 
                         match search_term(&v, &query, index_file) {
                             Ok(vals) => {
-                                let response = Response::from_string(vals.join("\n"));
-                                let _ = request.respond(response);
+                                if !vals.is_empty() {
+                                    let response = Response::from_string(vals.join("\n"));
+                                    let _ = request.respond(response);
+                                    return;
+                                }
+
+                                let _ = request.respond(Response::from_string("Zero matches!"));
                             }
                             Err(err) => {
                                 let response = Response::from_string(format!(
@@ -449,7 +458,9 @@ fn run_server(index_file: &str) {
                             }
                         };
                     } else {
-                        let response = Response::from_string("Failed to parse request body");
+                        let response = Response::from_string(
+                            "Missing some fields in the request body\nProvide `query`",
+                        );
                         let _ = request.respond(response.with_status_code(500));
                     }
                 }
