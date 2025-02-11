@@ -34,7 +34,7 @@ indexer index [path_to_documents_directory] [path_to_index_file]
 
 - ### Searching
 ```bash
-indexer search <path_to_index.json> <query>
+indexer query <path_to_index.json> <query>
 ```
 
 - ### Serving via http server

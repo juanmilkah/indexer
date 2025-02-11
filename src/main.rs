@@ -13,7 +13,7 @@ use serde_json::Value;
 use tiny_http::{Method, Response, Server};
 
 enum Commands {
-    Search {
+    Query {
         index_file: String,
         term: String,
     },
@@ -187,10 +187,10 @@ fn entry() -> Result<Option<Commands>, ()> {
 
     if let Some(subcommand) = args.next() {
         match subcommand.as_str() {
-            "search" | "-q" => {
+            "query" | "-q" => {
                 if let Some(index_file) = args.next() {
                     if let Some(term) = args.next() {
-                        Ok(Some(Commands::Search { term, index_file }))
+                        Ok(Some(Commands::Query { term, index_file }))
                     } else {
                         usage();
                         Ok(None)
@@ -244,11 +244,15 @@ fn entry() -> Result<Option<Commands>, ()> {
 }
 
 fn usage() {
-    println!("USAGE: [PROGRAM] [COMMANDS] [OPTIONS]");
-    println!("SubCommands:");
-    println!("\tsearch <index_path> <term>       Search for a term in documents");
-    println!("\tindex <directory> [index_path]   Create an index from a directory");
-    println!("\tserve <index_path>               Serve the responses to an http server");
+    println!("USAGE: [COMMANDS] [OPTIONS]");
+    println!("Commands:");
+    println!();
+    println!("\t<query | -q> <index_path> <term>          Query for a term in documents");
+    println!("\t<index | -i> <directory> [index_path]     Create an index from a directory");
+    println!("\t<serve | -s> <index_path>                 Serve the responses to an http server");
+    println!();
+    println!("\t<help | -h | --help>                      Show program Usage");
+    println!("\t<version | -v | --version>                Show the program version");
 }
 
 fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
@@ -554,7 +558,7 @@ fn main() -> io::Result<()> {
                     serde_json::to_writer(file, &index_table)?;
                 }
             }
-            Commands::Search { index_file, term } => {
+            Commands::Query { index_file, term } => {
                 let term_matches = match search_term(&v, &term, &index_file) {
                     Ok(val) => val,
                     Err(err) => {
