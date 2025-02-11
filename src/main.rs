@@ -187,7 +187,7 @@ fn entry() -> Result<Option<Commands>, ()> {
 
     if let Some(subcommand) = args.next() {
         match subcommand.as_str() {
-            "search" => {
+            "search" | "-q" => {
                 if let Some(index_file) = args.next() {
                     if let Some(term) = args.next() {
                         Ok(Some(Commands::Search { term, index_file }))
@@ -200,7 +200,7 @@ fn entry() -> Result<Option<Commands>, ()> {
                     Ok(None)
                 }
             }
-            "index" => {
+            "index" | "-i" => {
                 // index the provided directory and write the documents index table
                 // in the provided index file
                 // otherwise fall back to the current directory and index.json respectively
@@ -224,7 +224,7 @@ fn entry() -> Result<Option<Commands>, ()> {
                 }
             }
             //fix this later
-            "serve" => {
+            "serve" | "-s" => {
                 if let Some(index_file) = args.next() {
                     Ok(Some(Commands::Serve { index_file }))
                 } else {
@@ -390,19 +390,21 @@ fn get_index_table(filepath: &str) -> io::Result<IndexTable> {
 }
 
 fn run_server(index_file: &str) {
-    let server = match Server::http("0.0.0.0:8080") {
+    let port = "0.0.0.0:8080";
+    let server = match Server::http(port) {
         Ok(val) => val,
         Err(err) => {
-            eprintln!("Failed to bind server to port 8080: {err}");
+            eprintln!("Failed to bind server to port {port}: {err}");
             return;
         }
     };
-    println!("Server listening on port 8080");
+    println!("Server listening on port {port}");
 
     for mut request in server.incoming_requests() {
         match &request.method() {
             Method::Get => match request.url() {
                 "/" => {
+                    // respond with the index.html file
                     let html_file = home_dir()
                         .unwrap_or(PathBuf::from("."))
                         .join(".indexer")
@@ -414,10 +416,10 @@ fn run_server(index_file: &str) {
                 }
                 _ => {
                     let response = Response::from_string(format!(
-                        "Method not Allowed: {url}",
+                        "Route not Allowed: {url}",
                         url = request.url()
                     ));
-                    let _ = request.respond(response);
+                    let _ = request.respond(response.with_status_code(403));
                 }
             },
             Method::Post => match request.url() {
@@ -425,25 +427,34 @@ fn run_server(index_file: &str) {
                     let v = VectorCompare;
                     let mut body = String::new();
                     let _ = &request.as_reader().read_to_string(&mut body);
-                    let json: Value = body.parse().unwrap();
-                    let query = json.get("query").unwrap().to_string();
+                    let json: Value = body.parse().unwrap_or_default();
 
-                    match search_term(&v, &query, index_file) {
-                        Ok(vals) => {
-                            let response = Response::from_string(vals.join("\n"));
-                            let _ = request.respond(response);
-                        }
-                        Err(err) => {
-                            let response =
-                                Response::from_string(format!("Failed to search for query: {err}"));
-                            let _ = request.respond(response);
-                        }
-                    };
+                    if let Some(query) = json.get("query") {
+                        let query = query.to_string();
+
+                        match search_term(&v, &query, index_file) {
+                            Ok(vals) => {
+                                let response = Response::from_string(vals.join("\n"));
+                                let _ = request.respond(response);
+                            }
+                            Err(err) => {
+                                let response = Response::from_string(format!(
+                                    "Failed to search for query: {err}"
+                                ));
+                                let _ = request.respond(response.with_status_code(500));
+                            }
+                        };
+                    } else {
+                        let response = Response::from_string("Failed to parse request body");
+                        let _ = request.respond(response.with_status_code(500));
+                    }
                 }
                 _ => {
-                    let response =
-                        Response::from_string(format!("Invalid Url: {url}", url = request.url()));
-                    let _ = request.respond(response);
+                    let response = Response::from_string(format!(
+                        "Route not Allowed: {url}",
+                        url = request.url()
+                    ));
+                    let _ = request.respond(response.with_status_code(403));
                 }
             },
             _ => {
@@ -451,9 +462,47 @@ fn run_server(index_file: &str) {
                     "Method Not Allowed: {method}",
                     method = request.method()
                 ));
-                let _ = request.respond(response);
+                let _ = request.respond(response.with_status_code(403));
             }
         }
+    }
+}
+
+fn doc_index_is_expired(doc: &str, index_table: &IndexTable) -> Option<bool> {
+    let now = SystemTime::now();
+    match index_table.tables.get(doc) {
+        Some(doc_table) => {
+            let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
+            let elapsed_since_modified = now.duration_since(modified_at).unwrap();
+            let elapsed_since_indexed = now.duration_since(doc_table.indexed_at).unwrap();
+
+            Some(elapsed_since_indexed > elapsed_since_modified)
+        }
+        None => None,
+    }
+}
+
+fn index_doc_by_extension(v: &VectorCompare, doc: &str) -> Option<DocTable> {
+    let doc_extension = Path::new(&doc).extension();
+    match doc_extension {
+        Some(ext) => match ext.to_str().unwrap() {
+            "pdf" => match index_pdf_document(v, doc) {
+                Ok(doc_table) => Some(doc_table),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    None
+                }
+            },
+            "txt" | "md" => match index_text_document(v, doc) {
+                Ok(doc_table) => Some(doc_table),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    None
+                }
+            },
+            _ => None,
+        },
+        None => None,
     }
 }
 
@@ -472,7 +521,7 @@ fn main() -> io::Result<()> {
                     Err(_) => IndexTable::new(),
                 };
 
-                let mut counter = 0;
+                let mut counter: usize = 0;
 
                 for doc in docs {
                     // check if document index exists in the index_table;
@@ -480,50 +529,17 @@ fn main() -> io::Result<()> {
                     // since the last index
                     // if yes then reindex the file
                     // if no then skip the file
-                    let now = SystemTime::now();
-                    if let Some(doc_table) = index_table.tables.get(&doc) {
-                        let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
-                        let elapsed_since_modified = now.duration_since(modified_at).unwrap();
-                        let elapsed_since_indexed =
-                            now.duration_since(doc_table.indexed_at).unwrap();
-
-                        if elapsed_since_indexed < elapsed_since_modified {
-                            println!("Skipped {doc}");
+                    if let Some(is_expired) = doc_index_is_expired(&doc, &index_table) {
+                        if !is_expired {
                             continue;
                         }
                     }
 
                     //match the document's file extension and index it accordingly
-                    let doc_extension = Path::new(&doc).extension();
-                    match doc_extension {
-                        Some(ext) => match ext.to_str().unwrap() {
-                            "pdf" => match index_pdf_document(&v, &doc) {
-                                Ok(doc_table) => {
-                                    index_table.docs_count += 1;
-                                    counter += 1;
-                                    index_table.tables.insert(doc, doc_table);
-                                }
-                                Err(err) => {
-                                    eprintln!("Failed to index {doc}: {err}");
-                                    continue;
-                                }
-                            },
-                            "txt" | "md" => match index_text_document(&v, &doc) {
-                                Ok(doc_table) => {
-                                    index_table.docs_count += 1;
-                                    counter += 1;
-                                    index_table.tables.insert(doc, doc_table);
-                                }
-                                Err(err) => {
-                                    eprintln!("Failed to index {doc}: {err}");
-                                    continue;
-                                }
-                            },
-                            _ => continue,
-                        },
-
-                        None => continue,
-                    };
+                    if let Some(doc_table) = index_doc_by_extension(&v, &doc) {
+                        index_table.tables.insert(doc, doc_table);
+                        counter += 1;
+                    }
                 }
 
                 // write the documents index_table in the provided file path
