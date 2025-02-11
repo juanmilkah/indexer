@@ -560,7 +560,10 @@ fn index_doc_by_extension(v: &VectorCompare, doc: &str) -> Option<DocTable> {
                     None
                 }
             },
-            _ => None,
+            _ => {
+                eprintln!("Skipped {doc}");
+                None
+            }
         },
         None => None,
     }
