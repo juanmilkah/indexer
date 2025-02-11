@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -11,6 +11,8 @@ use rust_stemmers::{Algorithm, Stemmer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tiny_http::{Method, Response, Server};
+use xml::reader::XmlEvent;
+use xml::EventReader;
 
 enum Commands {
     Query {
@@ -157,14 +159,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
-        let mut set = HashSet::new();
-        let _ = stop_words::get(stop_words::LANGUAGE::English)
-            .into_iter()
-            .map(|w| set.insert(w));
+        let words = stop_words::get(stop_words::LANGUAGE::English);
         let mut cleaned = Vec::new();
 
         for token in tokens {
-            if set.contains(token) {
+            if words.contains(token) {
                 continue;
             }
             cleaned.push(token.to_string());
@@ -255,6 +254,46 @@ fn usage() {
     println!("\t<version | -v | --version>                Show the program version");
 }
 
+fn index_xml_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
+    println!("Indexing {filepath}...");
+    let indexed_at = SystemTime::now();
+    let mut doc_index: DocIndex = HashMap::new();
+
+    let file = File::open(filepath)?;
+    let file = BufReader::new(file);
+
+    let parser = EventReader::new(file);
+
+    for e in parser {
+        match e {
+            Ok(XmlEvent::Characters(text)) => {
+                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
+                let mut lex = Lexer::new(&text_chars);
+
+                let mut tokens = Vec::new();
+
+                while let Some(token) = lex.by_ref().next() {
+                    tokens.push(token);
+                }
+
+                let tokens = lex.remove_stop_words(&tokens);
+                doc_index = v.concodance(&tokens, &mut doc_index);
+            }
+            Err(err) => {
+                eprintln!("{err}");
+                continue;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(DocTable {
+        indexed_at,
+        word_count: doc_index.values().len() as u64,
+        doc_index,
+    })
+}
+
 fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
     println!("Indexing document: {filepath}");
     let indexed_at = SystemTime::now();
@@ -280,8 +319,7 @@ fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable>
                 {
                     let mut lex = Lexer::new(&text_chars);
 
-                    while let Some(token) = lex.next() {
-                        let token = lex.stem_token(&token);
+                    while let Some(token) = lex.by_ref().next() {
                         tokens.push(token);
                     }
 
@@ -484,9 +522,9 @@ fn run_server(index_file: &str) {
 }
 
 fn doc_index_is_expired(doc: &str, index_table: &IndexTable) -> Option<bool> {
-    let now = SystemTime::now();
     match index_table.tables.get(doc) {
         Some(doc_table) => {
+            let now = SystemTime::now();
             let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
             let elapsed_since_modified = now.duration_since(modified_at).unwrap();
             let elapsed_since_indexed = now.duration_since(doc_table.indexed_at).unwrap();
@@ -509,6 +547,13 @@ fn index_doc_by_extension(v: &VectorCompare, doc: &str) -> Option<DocTable> {
                 }
             },
             "txt" | "md" => match index_text_document(v, doc) {
+                Ok(doc_table) => Some(doc_table),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    None
+                }
+            },
+            "xml" | "xhtml" => match index_xml_document(v, doc) {
                 Ok(doc_table) => Some(doc_table),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
