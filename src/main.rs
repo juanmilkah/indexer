@@ -8,6 +8,7 @@ use std::{char, env};
 use home::home_dir;
 use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tiny_http::{Method, Response, Server};
@@ -254,8 +255,39 @@ fn usage() {
     println!("\t<version | -v | --version>                Show the program version");
 }
 
+fn index_html_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
+    println!("Indexing document: {filepath}");
+    let indexed_at = SystemTime::now();
+    let file = fs::read_to_string(filepath)?;
+    let document = Html::parse_document(&file);
+    let selector = Selector::parse("body").unwrap();
+
+    let body = document.select(&selector).next().unwrap();
+
+    let mut text = String::new();
+    for node in body.text() {
+        text.push_str(node);
+        text.push(' ');
+    }
+    let text_chars = text.trim().to_lowercase().chars().collect::<Vec<char>>();
+    let mut lex = Lexer::new(&text_chars);
+    let mut tokens = Vec::new();
+
+    while let Some(token) = lex.by_ref().next() {
+        tokens.push(token);
+    }
+    let tokens = lex.remove_stop_words(&tokens);
+    let doc_index = v.concodance(&tokens, &mut HashMap::new());
+
+    Ok(DocTable {
+        indexed_at,
+        word_count: doc_index.values().count() as u64,
+        doc_index,
+    })
+}
+
 fn index_xml_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
-    println!("Indexing {filepath}...");
+    println!("Indexing document: {filepath}");
     let indexed_at = SystemTime::now();
     let mut doc_index: DocIndex = HashMap::new();
 
@@ -554,6 +586,13 @@ fn index_doc_by_extension(v: &VectorCompare, doc: &str) -> Option<DocTable> {
                 }
             },
             "xml" | "xhtml" => match index_xml_document(v, doc) {
+                Ok(doc_table) => Some(doc_table),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    None
+                }
+            },
+            "html" => match index_html_document(v, doc) {
                 Ok(doc_table) => Some(doc_table),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");

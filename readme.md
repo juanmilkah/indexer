@@ -25,7 +25,7 @@ bash build.sh
 If path to docs is not provided it falls back to the current directory.  
 If the path to index file is not specified the fallback is `index.json`.  
 Supported file types:  
-(pdf, txt, md, xml, xhtml)
+(pdf, txt, md, xml, xhtml, html)
 
 ```bash
 indexer index [path_to_documents_directory] [path_to_index_file]
