@@ -1,52 +1,43 @@
+<!doctype html>
 <html>
   <head>
     <title>Indexer</title>
     <meta charset="utf-8" />
-
-    <style>
-      #query {
-        width: 500px;
-        height: 50px;
-      }
-    </style>
   </head>
   <body>
     <h1>Type a query to search</h1>
-    <input type="text" placeholder="query..." value="" id="query" autofocus />
+    <input type="text" id="query" value="" />
     <ul id="results"></ul>
 
     <script>
-      let input = document.getElementById("query");
-      const results = document.getElementById("results");
+      document.getElementById("query").addEventListener("change", (e) => {
+        fetch("/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain",
+          },
+          body: e.currentTarget.value,
+        })
+          .then((response) => response.text())
+          .then((result) => {
+            // result is a string of strings separated by newline
+            const list_items = result.split("\n");
+            let results = document.getElementById("results");
 
-      input.value.addEventListener("change", () => {
-        let query = input.value;
-        if (query.length !== 0) {
-          fetch("/search", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ query: query }),
+            // Clear previous results
+            results.innerHTML = "";
+
+            list_items.forEach((item) => {
+              if (item.trim() !== "") {
+                const li = document.createElement("li");
+                li.textContent = item;
+                results.appendChild(li);
+              }
+            });
           })
-            .then((response) => response.text())
-            .then((result) => {
-              // result is a string of strings separated by newline
-              const list_items = result.split("\n");
+          .catch((err) => console.error(err));
 
-              // Clear previous results
-              results.innerHTML = "";
-
-              list_items.forEach((item) => {
-                if (item.trim() !== "") {
-                  const li = document.createElement("li");
-                  li.textContent = item;
-                  results.appendChild(li);
-                }
-              });
-            })
-            .catch((err) => console.error(err));
-        }
+        console.log(e.currentTarget.value);
       });
     </script>
   </body>

@@ -10,7 +10,6 @@ use poppler::PopplerDocument;
 use rust_stemmers::{Algorithm, Stemmer};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tiny_http::{Method, Response, Server};
 use xml::reader::XmlEvent;
 use xml::EventReader;
@@ -464,7 +463,7 @@ fn get_index_table(filepath: &str) -> io::Result<IndexTable> {
 }
 
 fn run_server(index_file: &str) {
-    let port = "0.0.0.0:8080";
+    let port = "localhost:8080";
     let server = match Server::http(port) {
         Ok(val) => val,
         Err(err) => {
@@ -475,6 +474,12 @@ fn run_server(index_file: &str) {
     println!("Server listening on port {port}");
 
     for mut request in server.incoming_requests() {
+        println!(
+            "{method} {url}",
+            method = request.method(),
+            url = request.url()
+        );
+
         match &request.method() {
             Method::Get => match request.url() {
                 "/" => {
@@ -488,16 +493,12 @@ fn run_server(index_file: &str) {
                     let response = Response::from_file(File::open(&html_file).unwrap());
                     let _ = request.respond(response);
                 }
-                "/search" => {
-                    let response = Response::from_string("Use `POST` Method instead");
-                    let _ = request.respond(response.with_status_code(403));
-                }
                 _ => {
                     let response = Response::from_string(format!(
                         "Route not Allowed: {url}",
                         url = request.url()
                     ));
-                    let _ = request.respond(response.with_status_code(403));
+                    let _ = request.respond(response.with_status_code(404));
                 }
             },
             Method::Post => match request.url() {
@@ -505,34 +506,23 @@ fn run_server(index_file: &str) {
                     let v = VectorCompare;
                     let mut body = String::new();
                     let _ = &request.as_reader().read_to_string(&mut body);
-                    let json: Value = body.parse().unwrap_or_default();
 
-                    if let Some(query) = json.get("query") {
-                        let query = query.to_string();
-
-                        match search_term(&v, &query, index_file) {
-                            Ok(vals) => {
-                                if !vals.is_empty() {
-                                    let response = Response::from_string(vals.join("\n"));
-                                    let _ = request.respond(response);
-                                    return;
-                                }
-
+                    match search_term(&v, &body, index_file) {
+                        Ok(vals) => {
+                            if !vals.is_empty() {
+                                let vals = vals.join("\n").to_string();
+                                let response = Response::from_string(vals);
+                                let _ = request.respond(response);
+                            } else {
                                 let _ = request.respond(Response::from_string("Zero matches!"));
                             }
-                            Err(err) => {
-                                let response = Response::from_string(format!(
-                                    "Failed to search for query: {err}"
-                                ));
-                                let _ = request.respond(response.with_status_code(500));
-                            }
-                        };
-                    } else {
-                        let response = Response::from_string(
-                            "Missing some fields in the request body\nProvide `query`",
-                        );
-                        let _ = request.respond(response.with_status_code(500));
-                    }
+                        }
+                        Err(err) => {
+                            let response =
+                                Response::from_string(format!("Failed to search for query: {err}"));
+                            let _ = request.respond(response.with_status_code(500));
+                        }
+                    };
                 }
                 _ => {
                     let response = Response::from_string(format!(

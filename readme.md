@@ -44,7 +44,7 @@ indexer serve <path_to_index_file>
 ```
 
 ```bash
-http POST :8080/search query="foo bar baz"
+curl -X POST http://localhost:8080/search -d "foo bar baz"
 ```
 
 - ### Help page
