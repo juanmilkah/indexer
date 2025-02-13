@@ -1,18 +1,13 @@
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::{char, env};
 
-use home::home_dir;
-use poppler::PopplerDocument;
-use rust_stemmers::{Algorithm, Stemmer};
-use scraper::{Html, Selector};
-use serde::{Deserialize, Serialize};
-use tiny_http::{Method, Response, Server};
-use xml::reader::XmlEvent;
-use xml::EventReader;
+mod lexer;
+mod models;
+mod parsers;
+mod server;
 
 enum Commands {
     Query {
@@ -28,157 +23,6 @@ enum Commands {
     },
     Help,
     Version,
-}
-
-type DocIndex = HashMap<String, f32>;
-
-#[derive(Serialize, Deserialize)]
-struct IndexTable {
-    docs_count: u64,
-    tables: HashMap<String, DocTable>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct DocTable {
-    indexed_at: SystemTime,
-    word_count: u64,
-    doc_index: DocIndex,
-}
-
-impl IndexTable {
-    fn new() -> Self {
-        Self {
-            docs_count: 0,
-            tables: HashMap::new(),
-        }
-    }
-}
-
-struct VectorCompare;
-
-impl VectorCompare {
-    // count of every word that occurs in a document
-    fn concodance(&self, tokens: &[String], map: &mut DocIndex) -> DocIndex {
-        for token in tokens {
-            let token = token.trim_ascii();
-            let mut count: f32 = *map.entry(token.to_string()).or_insert(0.0);
-            count += 1.0;
-
-            map.insert(token.to_string(), count);
-        }
-
-        map.clone()
-    }
-
-    fn magnitude(&self, concodance: &DocIndex) -> f32 {
-        let mut total = 0.0;
-
-        for (_, count) in concodance.iter() {
-            total += count * count;
-        }
-
-        total.sqrt()
-    }
-
-    fn relation(&self, minor_doc: &DocIndex, major_doc: &DocIndex) -> f32 {
-        let mut top_value: f32 = 0.0;
-
-        for (word, count) in minor_doc.iter() {
-            if major_doc.contains_key(word) {
-                top_value += count * major_doc.get(word).unwrap();
-            }
-        }
-
-        let conc_1 = self.magnitude(minor_doc);
-        let conc_2 = self.magnitude(major_doc);
-
-        if conc_1 * conc_2 != 0.0 {
-            top_value / (conc_1 * conc_2)
-        } else {
-            0.0
-        }
-    }
-}
-
-struct Lexer<'a> {
-    input: &'a [char],
-}
-
-impl<'a> Lexer<'a> {
-    fn new(input: &'a [char]) -> Self {
-        Self { input }
-    }
-
-    fn trim_left(&mut self) {
-        while !self.input.is_empty() && self.input[0].is_whitespace() {
-            self.input = &self.input[1..];
-        }
-    }
-
-    fn chop(&mut self, n: usize) -> &'a [char] {
-        let token = &self.input[0..n];
-        self.input = &self.input[n..];
-        token
-    }
-
-    fn chop_while<P>(&mut self, mut predicate: P) -> &'a [char]
-    where
-        P: FnMut(&char) -> bool,
-    {
-        let mut n = 0;
-        while n < self.input.len() && predicate(&self.input[n]) {
-            n += 1;
-        }
-
-        self.chop(n)
-    }
-
-    fn next_token(&mut self) -> Option<String> {
-        self.trim_left();
-
-        if self.input.is_empty() {
-            return None;
-        }
-
-        if self.input[0].is_numeric() {
-            return Some(self.chop_while(|x| x.is_numeric()).iter().collect());
-        }
-
-        if self.input[0].is_alphabetic() {
-            let term: String = self.chop_while(|x| x.is_alphanumeric()).iter().collect();
-
-            let stemmed_token = self.stem_token(&term);
-            return Some(stemmed_token);
-        }
-        Some(self.chop(1).iter().collect())
-    }
-
-    fn stem_token(&self, token: &str) -> String {
-        let stemmer = Stemmer::create(Algorithm::English);
-        stemmer.stem(token).to_string()
-    }
-
-    fn remove_stop_words(&self, tokens: &[String]) -> Vec<String> {
-        let words = stop_words::get(stop_words::LANGUAGE::English);
-        let mut cleaned = Vec::new();
-
-        for token in tokens {
-            if words.contains(token) {
-                continue;
-            }
-            cleaned.push(token.to_string());
-        }
-
-        cleaned
-    }
-}
-
-impl Iterator for Lexer<'_> {
-    type Item = String;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_token()
-    }
 }
 
 fn entry() -> Result<Option<Commands>, ()> {
@@ -222,7 +66,6 @@ fn entry() -> Result<Option<Commands>, ()> {
                     }))
                 }
             }
-            //fix this later
             "serve" | "-s" => {
                 if let Some(index_file) = args.next() {
                     Ok(Some(Commands::Serve { index_file }))
@@ -254,180 +97,23 @@ fn usage() {
     println!("\t<version | -v | --version>                Show the program version");
 }
 
-fn index_html_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
-    println!("Indexing document: {filepath}");
-    let indexed_at = SystemTime::now();
-    let file = fs::read_to_string(filepath)?;
-    let document = Html::parse_document(&file);
-    let selector = Selector::parse("body").unwrap();
+fn search_term(term: &str, index_file: &str) -> io::Result<Vec<String>> {
+    let file = BufReader::new(File::open(index_file)?);
+    let index_table: models::IndexTable = serde_json::from_reader(file)?;
 
-    let body = document.select(&selector).next().unwrap();
+    let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
+    let mut lex = lexer::Lexer::new(&text_chars);
 
-    let mut text = String::new();
-    for node in body.text() {
-        text.push_str(node);
-        text.push(' ');
-    }
-    let text_chars = text.trim().to_lowercase().chars().collect::<Vec<char>>();
-    let mut lex = Lexer::new(&text_chars);
     let mut tokens = Vec::new();
 
     while let Some(token) = lex.by_ref().next() {
         tokens.push(token);
     }
-    let tokens = lex.remove_stop_words(&tokens);
-    let doc_index = v.concodance(&tokens, &mut HashMap::new());
 
-    Ok(DocTable {
-        indexed_at,
-        word_count: doc_index.values().count() as u64,
-        doc_index,
-    })
-}
+    let tokens = parsers::remove_stop_words(&tokens);
+    let model = models::Model::new(index_table);
+    let result = model.search_terms(&tokens);
 
-fn index_xml_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
-    println!("Indexing document: {filepath}");
-    let indexed_at = SystemTime::now();
-    let mut doc_index: DocIndex = HashMap::new();
-
-    let file = File::open(filepath)?;
-    let file = BufReader::new(file);
-
-    let parser = EventReader::new(file);
-
-    for e in parser {
-        match e {
-            Ok(XmlEvent::Characters(text)) => {
-                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
-                let mut lex = Lexer::new(&text_chars);
-
-                let mut tokens = Vec::new();
-
-                while let Some(token) = lex.by_ref().next() {
-                    tokens.push(token);
-                }
-
-                let tokens = lex.remove_stop_words(&tokens);
-                doc_index = v.concodance(&tokens, &mut doc_index);
-            }
-            Err(err) => {
-                eprintln!("{err}");
-                continue;
-            }
-            _ => {}
-        }
-    }
-
-    Ok(DocTable {
-        indexed_at,
-        word_count: doc_index.values().len() as u64,
-        doc_index,
-    })
-}
-
-fn index_pdf_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
-    println!("Indexing document: {filepath}");
-    let indexed_at = SystemTime::now();
-    let document = match PopplerDocument::new_from_file(filepath, None) {
-        Ok(doc) => doc,
-        Err(err) => {
-            eprintln!("Failed to load document: {err}");
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{err:?}"),
-            ));
-        }
-    };
-
-    let mut doc_index: DocIndex = HashMap::new();
-    let end = document.get_n_pages();
-
-    for i in 1..end {
-        if let Some(page) = document.get_page(i) {
-            if let Some(text) = page.get_text() {
-                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
-                let mut tokens = Vec::new();
-                {
-                    let mut lex = Lexer::new(&text_chars);
-
-                    while let Some(token) = lex.by_ref().next() {
-                        tokens.push(token);
-                    }
-
-                    tokens = lex.remove_stop_words(&tokens);
-                }
-                doc_index = v.concodance(&tokens, &mut doc_index);
-            }
-        }
-    }
-    let doc_table = DocTable {
-        indexed_at,
-        word_count: doc_index.keys().len() as u64,
-        doc_index,
-    };
-
-    Ok(doc_table)
-}
-
-fn index_text_document(v: &VectorCompare, filepath: &str) -> io::Result<DocTable> {
-    println!("Indexing {filepath}...");
-    let indexed_at = SystemTime::now();
-    let content = match fs::read_to_string(filepath) {
-        Ok(val) => val,
-        Err(err) => {
-            eprintln!("Failed to read file {filepath}: {err}");
-            return Err(err);
-        }
-    };
-
-    let content = content.to_lowercase().chars().collect::<Vec<char>>();
-    let mut lex = Lexer::new(&content);
-    let mut tokens = Vec::new();
-    while let Some(token) = lex.next_token() {
-        tokens.push(token);
-    }
-
-    let tokens = lex.remove_stop_words(&tokens);
-    let doc_index = v.concodance(&tokens, &mut HashMap::new());
-
-    Ok(DocTable {
-        indexed_at,
-        word_count: doc_index.len() as u64,
-        doc_index,
-    })
-}
-
-fn search_term(v: &VectorCompare, term: &str, index_file: &str) -> io::Result<Vec<String>> {
-    let mut matches = Vec::new();
-
-    let file = BufReader::new(File::open(index_file)?);
-    let index_table: IndexTable = serde_json::from_reader(file)?;
-
-    let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
-    let mut lex = Lexer::new(&text_chars);
-
-    let mut tokens = Vec::new();
-
-    while let Some(token) = lex.next() {
-        let token = lex.stem_token(&token);
-        tokens.push(token);
-    }
-
-    let tokens = lex.remove_stop_words(&tokens);
-
-    let term_conc = v.concodance(&tokens, &mut HashMap::new());
-    for (doc_name, doc_table) in index_table.tables.iter() {
-        let relation = v.relation(&term_conc, &doc_table.doc_index);
-
-        if relation != 0.0 {
-            // relation = relation.log10().abs();
-            matches.push((relation, doc_name.clone()));
-        }
-    }
-
-    matches.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    matches.reverse();
-    let result = matches.iter().map(|v| v.1.clone()).collect::<Vec<String>>();
     Ok(result)
 }
 
@@ -456,94 +142,13 @@ fn version_info() {
     println!("INDEXER VERSION 0.1.0");
 }
 
-fn get_index_table(filepath: &str) -> io::Result<IndexTable> {
+fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
     let index_file = File::open(filepath)?;
-    let index_table: IndexTable = serde_json::from_reader(&index_file)?;
+    let index_table: models::IndexTable = serde_json::from_reader(&index_file)?;
     Ok(index_table)
 }
 
-fn run_server(index_file: &str) {
-    let port = "localhost:8080";
-    let server = match Server::http(port) {
-        Ok(val) => val,
-        Err(err) => {
-            eprintln!("Failed to bind server to port {port}: {err}");
-            return;
-        }
-    };
-    println!("Server listening on port {port}");
-
-    for mut request in server.incoming_requests() {
-        println!(
-            "{method} {url}",
-            method = request.method(),
-            url = request.url()
-        );
-
-        match &request.method() {
-            Method::Get => match request.url() {
-                "/" => {
-                    // respond with the index.html file
-                    let html_file = home_dir()
-                        .unwrap_or(PathBuf::from("."))
-                        .join(".indexer")
-                        .join("index.html")
-                        .to_string_lossy()
-                        .to_string();
-                    let response = Response::from_file(File::open(&html_file).unwrap());
-                    let _ = request.respond(response);
-                }
-                _ => {
-                    let response = Response::from_string(format!(
-                        "Route not Allowed: {url}",
-                        url = request.url()
-                    ));
-                    let _ = request.respond(response.with_status_code(404));
-                }
-            },
-            Method::Post => match request.url() {
-                "/search" => {
-                    let v = VectorCompare;
-                    let mut body = String::new();
-                    let _ = &request.as_reader().read_to_string(&mut body);
-
-                    match search_term(&v, &body, index_file) {
-                        Ok(vals) => {
-                            if !vals.is_empty() {
-                                let vals = vals.join("\n").to_string();
-                                let response = Response::from_string(vals);
-                                let _ = request.respond(response);
-                            } else {
-                                let _ = request.respond(Response::from_string("Zero matches!"));
-                            }
-                        }
-                        Err(err) => {
-                            let response =
-                                Response::from_string(format!("Failed to search for query: {err}"));
-                            let _ = request.respond(response.with_status_code(500));
-                        }
-                    };
-                }
-                _ => {
-                    let response = Response::from_string(format!(
-                        "Route not Allowed: {url}",
-                        url = request.url()
-                    ));
-                    let _ = request.respond(response.with_status_code(403));
-                }
-            },
-            _ => {
-                let response = Response::from_string(format!(
-                    "Method Not Allowed: {method}",
-                    method = request.method()
-                ));
-                let _ = request.respond(response.with_status_code(403));
-            }
-        }
-    }
-}
-
-fn doc_index_is_expired(doc: &str, index_table: &IndexTable) -> Option<bool> {
+fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<bool> {
     match index_table.tables.get(doc) {
         Some(doc_table) => {
             let now = SystemTime::now();
@@ -557,49 +162,48 @@ fn doc_index_is_expired(doc: &str, index_table: &IndexTable) -> Option<bool> {
     }
 }
 
-fn index_doc_by_extension(v: &VectorCompare, doc: &str) -> Option<DocTable> {
+fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<()> {
     let doc_extension = Path::new(&doc).extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
-            "pdf" => match index_pdf_document(v, doc) {
-                Ok(doc_table) => Some(doc_table),
+            "pdf" => match parsers::index_pdf_document(model, doc) {
+                Ok(()) => Ok(()),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
-                    None
+                    Err(err)
                 }
             },
-            "txt" | "md" => match index_text_document(v, doc) {
-                Ok(doc_table) => Some(doc_table),
+            "txt" | "md" => match parsers::index_text_document(model, doc) {
+                Ok(()) => Ok(()),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
-                    None
+                    Err(err)
                 }
             },
-            "xml" | "xhtml" => match index_xml_document(v, doc) {
-                Ok(doc_table) => Some(doc_table),
+            "xml" | "xhtml" => match parsers::index_xml_document(model, doc) {
+                Ok(()) => Ok(()),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
-                    None
+                    Err(err)
                 }
             },
-            "html" => match index_html_document(v, doc) {
-                Ok(doc_table) => Some(doc_table),
+            "html" => match parsers::index_html_document(model, doc) {
+                Ok(()) => Ok(()),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
-                    None
+                    Err(err)
                 }
             },
             _ => {
                 eprintln!("Skipped {doc}");
-                None
+                Ok(())
             }
         },
-        None => None,
+        None => Ok(()),
     }
 }
 
 fn main() -> io::Result<()> {
-    let v = VectorCompare;
     match entry() {
         Ok(Some(val)) => match val {
             Commands::Index {
@@ -608,46 +212,40 @@ fn main() -> io::Result<()> {
             } => {
                 let files_dir = PathBuf::from(files_dir);
                 let docs = read_files_recursively(&files_dir)?;
-                let mut index_table = match get_index_table(&index_path) {
+                let index_table = match get_index_table(&index_path) {
                     Ok(val) => val,
-                    Err(_) => IndexTable::new(),
+                    Err(_) => models::IndexTable::new(),
                 };
+                let mut model = models::Model::new(index_table);
 
-                let mut counter: usize = 0;
-
-                for doc in docs {
+                'classify: for doc in docs {
                     // check if document index exists in the index_table;
                     // if it exixts, check whether the file has been modified
                     // since the last index
                     // if yes then reindex the file
                     // if no then skip the file
-                    if let Some(is_expired) = doc_index_is_expired(&doc, &index_table) {
+                    if let Some(is_expired) = doc_index_is_expired(&doc, &model.index_table) {
                         if !is_expired {
-                            continue;
+                            println!("Skipped {doc}");
+                            continue 'classify;
                         }
                     }
 
                     //match the document's file extension and index it accordingly
-                    if let Some(doc_table) = index_doc_by_extension(&v, &doc) {
-                        index_table.tables.insert(doc, doc_table);
-                        counter += 1;
-                    }
+                    let _ = index_doc_by_extension(&mut model, &doc);
                 }
+
+                // update the models idf
+                model.update_idf();
 
                 // write the documents index_table in the provided file path
-                println!(
-                    "Indexed {counter} new document{}!",
-                    if counter == 1 { "" } else { "s" }
-                );
 
-                if counter != 0 {
-                    println!("Writing into {index_path}...");
-                    let file = BufWriter::new(File::create(index_path)?);
-                    serde_json::to_writer(file, &index_table)?;
-                }
+                println!("Writing into {index_path}...");
+                let file = BufWriter::new(File::create(index_path)?);
+                serde_json::to_writer(file, &model.index_table)?;
             }
             Commands::Query { index_file, term } => {
-                let term_matches = match search_term(&v, &term, &index_file) {
+                let term_matches = match search_term(&term, &index_file) {
                     Ok(val) => val,
                     Err(err) => {
                         return Err(err);
@@ -664,7 +262,7 @@ fn main() -> io::Result<()> {
                 }
             }
             Commands::Serve { index_file } => {
-                run_server(&index_file);
+                server::run_server(&index_file);
                 return Ok(());
             }
             Commands::Help => {

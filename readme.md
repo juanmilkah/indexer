@@ -1,8 +1,11 @@
-# Vector-Space Search Engine
+# Local Search Engine
+A search engine for local directories implemented in Rust.  
+It employs the [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) algorithm for file indexing, [snowball](https://snowballstem.org/) stemming algorithms for token stemming.
 
 ## Features
 - Indexing pdf files in a directory  
-- Searching of terms
+- Querying of terms
+- Serve via http
 
 ## Installation
 
@@ -32,7 +35,7 @@ indexer index [path_to_documents_directory] [path_to_index_file]
 ```
 
 
-- ### Searching
+- ### Querying
 ```bash
 indexer query <path_to_index.json> <query>
 ```
@@ -44,7 +47,7 @@ indexer serve <path_to_index_file>
 ```
 
 ```bash
-curl -X POST http://localhost:8080/search -d "foo bar baz"
+curl -X POST http://localhost:8080/query d "foo bar baz"
 ```
 
 - ### Help page
