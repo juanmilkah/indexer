@@ -138,8 +138,7 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
 }
 
 fn version_info() {
-    let version = env::var("CARGO_PKG_VERSION").unwrap();
-    println!("{version}");
+    println!("{version}", version = env!("CARGO_PKG_VERSION"));
 }
 
 fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
