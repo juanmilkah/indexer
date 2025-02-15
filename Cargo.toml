@@ -2,7 +2,7 @@
 name = "indexer"
 description = "An vector space based search engine for local directories"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "GNU/GPL3"
 

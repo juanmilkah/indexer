@@ -137,9 +137,9 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
     Ok(files)
 }
 
-//fix this -->figure out how to read from the Cargo.toml file
 fn version_info() {
-    println!("INDEXER VERSION 0.1.0");
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    println!("{version}");
 }
 
 fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
