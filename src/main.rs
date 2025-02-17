@@ -25,6 +25,11 @@ enum Commands {
     Version,
 }
 
+enum DocHandler {
+    Indexed,
+    Skipped,
+}
+
 fn entry() -> Result<Option<Commands>, ()> {
     let mut args = env::args().skip(1).peekable();
 
@@ -161,33 +166,34 @@ fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<b
     }
 }
 
-fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<()> {
+fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<DocHandler> {
     let doc_extension = Path::new(&doc).extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
             "pdf" => match parsers::index_pdf_document(model, doc) {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
-                    Err(err)
-                }
-            },
-            "txt" | "md" => match parsers::index_text_document(model, doc) {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(DocHandler::Indexed),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
                 }
             },
             "xml" | "xhtml" => match parsers::index_xml_document(model, doc) {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(DocHandler::Indexed),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
                 }
             },
             "html" => match parsers::index_html_document(model, doc) {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(DocHandler::Indexed),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    Err(err)
+                }
+            },
+
+            "txt" | "md" => match parsers::index_text_document(model, doc) {
+                Ok(()) => Ok(DocHandler::Indexed),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
@@ -195,10 +201,10 @@ fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<()
             },
             _ => {
                 eprintln!("Skipped {doc}");
-                Ok(())
+                Ok(DocHandler::Skipped)
             }
         },
-        None => Ok(()),
+        None => Ok(DocHandler::Skipped),
     }
 }
 
@@ -216,6 +222,8 @@ fn main() -> io::Result<()> {
                     Err(_) => models::IndexTable::new(),
                 };
                 let mut model = models::Model::new(index_table);
+                let mut indexed_docs = 0;
+                let mut skipped = 0;
 
                 'classify: for doc in docs {
                     // check if document index exists in the index_table;
@@ -226,19 +234,27 @@ fn main() -> io::Result<()> {
                     if let Some(is_expired) = doc_index_is_expired(&doc, &model.index_table) {
                         if !is_expired {
                             println!("Skipped {doc}");
+                            skipped += 1;
                             continue 'classify;
                         }
                     }
 
                     //match the document's file extension and index it accordingly
-                    let _ = index_doc_by_extension(&mut model, &doc);
+                    match index_doc_by_extension(&mut model, &doc) {
+                        Ok(DocHandler::Skipped) => skipped += 1,
+                        Ok(DocHandler::Indexed) => indexed_docs += 1,
+                        Err(e) => eprintln!("{e}"),
+                    }
                 }
 
+                model.index_table.docs_count = model.index_table.tables.keys().count() as u64;
                 // update the models idf
                 model.update_idf();
 
                 // write the documents index_table in the provided file path
 
+                println!("Indexed {indexed_docs} documents!");
+                println!("Skipped {skipped} documents!");
                 println!("Writing into {index_path}...");
                 let file = BufWriter::new(File::create(index_path)?);
                 serde_json::to_writer(file, &model.index_table)?;

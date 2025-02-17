@@ -4,13 +4,11 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 pub type DocIndex = HashMap<String, f32>;
-type DocFreq = HashMap<String, u32>;
 
 #[derive(Serialize, Deserialize)]
 pub struct IndexTable {
     pub docs_count: u64,
     pub tables: HashMap<String, DocTable>,
-    pub doc_freq: DocFreq, /*word count per doc*/
 }
 
 #[derive(Serialize, Deserialize)]
@@ -25,7 +23,6 @@ impl IndexTable {
         Self {
             docs_count: 0,
             tables: HashMap::new(),
-            doc_freq: HashMap::new(),
         }
     }
 }
@@ -47,12 +44,13 @@ impl Model {
         //calculate term frequencies
         for token in tokens {
             let token = token.trim().to_string();
-            *doc_index.entry(token).or_insert(1.0) += 1.0;
+            let t_count = doc_index.entry(token).or_insert(1.0);
+            *t_count += 1.0;
         }
 
         // convert counts to Tf
         for count in doc_index.values_mut() {
-            *count /= word_count as f32;
+            *count = (*count / word_count as f32) + 1.0_f32;
         }
 
         let doc_table = DocTable {
@@ -62,7 +60,6 @@ impl Model {
         };
 
         self.index_table.tables.insert(doc.to_string(), doc_table);
-        self.index_table.docs_count += 1;
     }
 
     pub fn update_idf(&mut self) {
@@ -80,7 +77,7 @@ impl Model {
         for doc_table in self.index_table.tables.values_mut() {
             for (term, tf) in doc_table.doc_index.iter_mut() {
                 let doc_freq = *term_doc_freq.get(term).unwrap_or(&1.0) as f32;
-                let idf = (docs_count / doc_freq).ln();
+                let idf: f32 = (docs_count / doc_freq).ln().abs();
                 *tf *= idf;
             }
         }
