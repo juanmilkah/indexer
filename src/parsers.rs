@@ -96,25 +96,27 @@ pub fn index_pdf_document(model: &mut Model, filepath: &str) -> io::Result<()> {
     };
 
     let end = document.get_n_pages();
+    let mut whole_doc = String::new();
 
     for i in 1..end {
         if let Some(page) = document.get_page(i) {
             if let Some(text) = page.get_text() {
-                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
-                let mut tokens = Vec::new();
-                {
-                    let mut lex = Lexer::new(&text_chars);
-
-                    while let Some(token) = lex.by_ref().next() {
-                        tokens.push(token);
-                    }
-
-                    tokens = remove_stop_words(&tokens);
-                }
-                model.add_document(filepath, &tokens);
+                whole_doc.push_str(text);
             }
         }
     }
+    let text_chars = whole_doc.to_lowercase().chars().collect::<Vec<char>>();
+    let mut tokens = Vec::new();
+    {
+        let mut lex = Lexer::new(&text_chars);
+
+        while let Some(token) = lex.by_ref().next() {
+            tokens.push(token);
+        }
+
+        tokens = remove_stop_words(&tokens);
+    }
+    model.add_document(filepath, &tokens);
 
     Ok(())
 }

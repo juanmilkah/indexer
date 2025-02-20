@@ -42,8 +42,9 @@ indexer query <path_to_index.json> <query>
 
 - ### Serving via http server
 Localhost on port `8080`
+The average latency for a query is `45ms`
 ```bash
-indexer serve <path_to_index_file>
+indexer serve <path_to_index_file> [port]
 ```
 
 ```bash
@@ -59,6 +60,10 @@ indexer --help
 ```bash
 indexer --version
 ```
+
+### TODO 
+The files index is stored in memory while indexing is in progress,
+which becomes a bottleneck when the file count gets past 50000.
 
 ## Licensing
 The project is licensed under the [GPL3 License](LICENSE)

@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use crate::search_term;
 
-pub fn run_server(index_file: &str) {
-    let port = "localhost:8080";
-    let server = match Server::http(port) {
+pub fn run_server(index_file: &str, port: u32) {
+    let port = format!("localhost:{port}");
+    let server = match Server::http(&port) {
         Ok(val) => val,
         Err(err) => {
             eprintln!("Failed to bind server to port {port}: {err}");
@@ -27,14 +27,18 @@ pub fn run_server(index_file: &str) {
         match &request.method() {
             Method::Get => match request.url() {
                 "/" => {
-                    // respond with the index.html file
+                    // respond with the index.html file from the .indexer directory
+                    // or the current directory in the case of development
                     let html_file = home_dir()
                         .unwrap_or(PathBuf::from("."))
                         .join(".indexer")
                         .join("index.html")
                         .to_string_lossy()
                         .to_string();
-                    let response = Response::from_file(File::open(&html_file).unwrap());
+
+                    let file =
+                        File::open(&html_file).unwrap_or(File::open("./index.html").unwrap());
+                    let response = Response::from_file(file);
                     let _ = request.respond(response);
                 }
                 _ => {

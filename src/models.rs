@@ -60,6 +60,7 @@ impl Model {
         };
 
         self.index_table.tables.insert(doc.to_string(), doc_table);
+        self.index_table.docs_count += 1;
     }
 
     pub fn update_idf(&mut self) {

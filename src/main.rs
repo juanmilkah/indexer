@@ -20,6 +20,7 @@ enum Commands {
     },
     Serve {
         index_file: String,
+        port: u32,
     },
     Help,
     Version,
@@ -31,6 +32,17 @@ enum DocHandler {
 }
 
 fn entry() -> Result<Option<Commands>, ()> {
+    // Match the commadline arguments
+    //
+    // Indexing files in a directory
+    // indexer index ~/docs main_index.json
+    //
+    // Querying for a term from a directory's index
+    // indexer query main_index.json "foo bar baz"
+    //
+    // Serving the results via http
+    // indexer serve main_index.json 8989
+    // curl http://localhost:8989/
     let mut args = env::args().skip(1).peekable();
 
     if let Some(subcommand) = args.next() {
@@ -73,7 +85,18 @@ fn entry() -> Result<Option<Commands>, ()> {
             }
             "serve" | "-s" => {
                 if let Some(index_file) = args.next() {
-                    Ok(Some(Commands::Serve { index_file }))
+                    if let Some(port) = args.next() {
+                        let port = match port.parse() {
+                            Ok(val) => val,
+                            Err(_) => 8080,
+                        };
+                        Ok(Some(Commands::Serve { index_file, port }))
+                    } else {
+                        Ok(Some(Commands::Serve {
+                            index_file,
+                            port: 8080,
+                        }))
+                    }
                 } else {
                     eprintln!("Missing index file path");
                     Ok(None)
@@ -96,7 +119,7 @@ fn usage() {
     println!();
     println!("\t<query | -q> <index_path> <term>          Query for a term in documents");
     println!("\t<index | -i> <directory> [index_path]     Create an index from a directory");
-    println!("\t<serve | -s> <index_path>                 Serve the responses to an http server");
+    println!("\t<serve | -s> <index_path> [port]          Serve the responses to an http server");
     println!();
     println!("\t<help | -h | --help>                      Show program Usage");
     println!("\t<version | -v | --version>                Show the program version");
@@ -169,6 +192,7 @@ fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<b
 fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<DocHandler> {
     let doc_extension = Path::new(&doc).extension();
     match doc_extension {
+        // maybe we should try some threading here
         Some(ext) => match ext.to_str().unwrap() {
             "pdf" => match parsers::index_pdf_document(model, doc) {
                 Ok(()) => Ok(DocHandler::Indexed),
@@ -247,7 +271,6 @@ fn main() -> io::Result<()> {
                     }
                 }
 
-                model.index_table.docs_count = model.index_table.tables.keys().count() as u64;
                 // update the models idf
                 model.update_idf();
 
@@ -276,8 +299,8 @@ fn main() -> io::Result<()> {
                     println!("{m}");
                 }
             }
-            Commands::Serve { index_file } => {
-                server::run_server(&index_file);
+            Commands::Serve { index_file, port } => {
+                server::run_server(&index_file, port);
                 return Ok(());
             }
             Commands::Help => {
