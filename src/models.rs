@@ -53,14 +53,15 @@ impl Model {
             *count = (*count / word_count as f32) + 1.0_f32;
         }
 
-        let doc_table = DocTable {
-            indexed_at: SystemTime::now(),
-            word_count: word_count as u64,
-            doc_index,
-        };
-
-        self.index_table.tables.insert(doc.to_string(), doc_table);
-        self.index_table.docs_count += 1;
+        if !doc_index.is_empty() {
+            let doc_table = DocTable {
+                indexed_at: SystemTime::now(),
+                word_count: word_count as u64,
+                doc_index,
+            };
+            self.index_table.tables.insert(doc.to_string(), doc_table);
+            self.index_table.docs_count += 1;
+        }
     }
 
     pub fn update_idf(&mut self) {
@@ -101,7 +102,7 @@ impl Model {
             }
         }
 
-        //sort results
+        //sort results in descending order 9,8,7,6,5,4,3,2,1
         let mut sorted_results: Vec<_> = results.into_iter().collect();
         sorted_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 

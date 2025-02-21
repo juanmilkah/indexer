@@ -86,10 +86,7 @@ fn entry() -> Result<Option<Commands>, ()> {
             "serve" | "-s" => {
                 if let Some(index_file) = args.next() {
                     if let Some(port) = args.next() {
-                        let port = match port.parse() {
-                            Ok(val) => val,
-                            Err(_) => 8080,
-                        };
+                        let port = port.parse().unwrap_or(8080);
                         Ok(Some(Commands::Serve { index_file, port }))
                     } else {
                         Ok(Some(Commands::Serve {
