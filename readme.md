@@ -40,6 +40,10 @@ indexer index [path_to_documents_directory] [path_to_index_file]
 indexer query <path_to_index.json> <query>
 ```
 
+```console
+indexer query docs_index.json "foo bar baz" | less
+```
+
 - ### Serving via http server
 Localhost on port `8080`
 The average latency for a query is `45ms`

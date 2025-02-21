@@ -102,7 +102,10 @@ fn entry() -> Result<Option<Commands>, ()> {
 
             "help" | "--help" | "-h" => Ok(Some(Commands::Help)),
             "version" | "--version" | "-v" => Ok(Some(Commands::Version)),
-            _ => Ok(None),
+            _ => {
+                usage();
+                Ok(None)
+            }
         }
     } else {
         usage();
@@ -296,10 +299,10 @@ fn main() -> io::Result<()> {
                     println!("{m}");
                 }
             }
-            Commands::Serve { index_file, port } => {
-                server::run_server(&index_file, port);
-                return Ok(());
-            }
+            Commands::Serve { index_file, port } => match server::run_server(&index_file, port) {
+                Ok(()) => return Ok(()),
+                Err(e) => return Err(e),
+            },
             Commands::Help => {
                 usage();
                 return Ok(());

@@ -2,17 +2,18 @@ use home::home_dir;
 use tiny_http::{Method, Response, Server};
 
 use std::fs::File;
+use std::io;
 use std::path::PathBuf;
 
 use crate::search_term;
 
-pub fn run_server(index_file: &str, port: u32) {
+pub fn run_server(index_file: &str, port: u32) -> io::Result<()> {
     let port = format!("localhost:{port}");
     let server = match Server::http(&port) {
         Ok(val) => val,
         Err(err) => {
             eprintln!("Failed to bind server to port {port}: {err}");
-            return;
+            return Err(io::Error::new(io::ErrorKind::ConnectionRefused, err));
         }
     };
     println!("Server listening on port {port}");
@@ -88,4 +89,6 @@ pub fn run_server(index_file: &str, port: u32) {
             }
         }
     }
+
+    Ok(())
 }
