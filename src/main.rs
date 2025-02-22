@@ -233,67 +233,68 @@ fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<Do
     }
 }
 
+fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
+    let files_dir = PathBuf::from(files_dir);
+    let docs = read_files_recursively(&files_dir)?;
+    let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());
+
+    // process the documents in parallel
+    let model = Arc::new(Mutex::new(models::Model::new(index_table)));
+    let indexed_docs = Arc::new(AtomicUsize::new(0));
+    let skipped = Arc::new(AtomicUsize::new(0));
+
+    docs.par_iter().for_each(|doc| {
+        // check if document index exists in the index_table;
+        // if it exixts, check whether the file has been modified
+        // since the last index
+        // if yes then reindex the file
+        // if no then skip the file
+        if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
+            if !is_expired {
+                println!("Skipped {doc}");
+                skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+
+        //match the document's file extension and index it accordingly
+        match index_doc_by_extension(&mut model.lock().unwrap(), doc) {
+            Ok(DocHandler::Skipped) => skipped.fetch_add(1, Ordering::Relaxed),
+            Ok(DocHandler::Indexed) => indexed_docs.fetch_add(1, Ordering::Relaxed),
+            Err(e) => {
+                eprintln!("{e}");
+                0
+            }
+        };
+    });
+    //
+    // update the models idf
+    model.lock().unwrap().update_idf();
+
+    // write the documents index_table in the provided file path
+
+    println!(
+        "Indexed {indexed_docs} documents!",
+        indexed_docs = indexed_docs.load(Ordering::Relaxed)
+    );
+    println!(
+        "Skipped {skipped} documents!",
+        skipped = skipped.load(Ordering::Relaxed)
+    );
+    println!("Writing into {index_path}...");
+    let file = BufWriter::new(File::create(index_path)?);
+    serde_json::to_writer(file, &model.lock().unwrap().index_table)?;
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     match entry() {
         Ok(Some(val)) => match val {
             Commands::Index {
                 files_dir,
                 index_path,
-            } => {
-                let files_dir = PathBuf::from(files_dir);
-                let docs = read_files_recursively(&files_dir)?;
-                let index_table =
-                    get_index_table(&index_path).unwrap_or_else(|_| models::IndexTable::new());
-
-                // process the documents in parallel
-                let model = Arc::new(Mutex::new(models::Model::new(index_table)));
-                let indexed_docs = Arc::new(AtomicUsize::new(0));
-                let skipped = Arc::new(AtomicUsize::new(0));
-
-                docs.par_iter().for_each(|doc| {
-                    // check if document index exists in the index_table;
-                    // if it exixts, check whether the file has been modified
-                    // since the last index
-                    // if yes then reindex the file
-                    // if no then skip the file
-                    if let Some(is_expired) =
-                        doc_index_is_expired(doc, &model.lock().unwrap().index_table)
-                    {
-                        if !is_expired {
-                            println!("Skipped {doc}");
-                            skipped.fetch_add(1, Ordering::Relaxed);
-                            return;
-                        }
-                    }
-
-                    //match the document's file extension and index it accordingly
-                    match index_doc_by_extension(&mut model.lock().unwrap(), doc) {
-                        Ok(DocHandler::Skipped) => skipped.fetch_add(1, Ordering::Relaxed),
-                        Ok(DocHandler::Indexed) => indexed_docs.fetch_add(1, Ordering::Relaxed),
-                        Err(e) => {
-                            eprintln!("{e}");
-                            0
-                        }
-                    };
-                });
-                //
-                // update the models idf
-                model.lock().unwrap().update_idf();
-
-                // write the documents index_table in the provided file path
-
-                println!(
-                    "Indexed {indexed_docs} documents!",
-                    indexed_docs = indexed_docs.load(Ordering::Relaxed)
-                );
-                println!(
-                    "Skipped {skipped} documents!",
-                    skipped = skipped.load(Ordering::Relaxed)
-                );
-                println!("Writing into {index_path}...");
-                let file = BufWriter::new(File::create(index_path)?);
-                serde_json::to_writer(file, &model.lock().unwrap().index_table)?;
-            }
+            } => index_documents(&files_dir, &index_path)?,
             Commands::Query { index_file, term } => {
                 let term_matches = match search_term(&term, &index_file) {
                     Ok(val) => val,
@@ -311,10 +312,7 @@ fn main() -> io::Result<()> {
                     println!("{m}");
                 }
             }
-            Commands::Serve { index_file, port } => match server::run_server(&index_file, port) {
-                Ok(()) => return Ok(()),
-                Err(e) => return Err(e),
-            },
+            Commands::Serve { index_file, port } => server::run_server(&index_file, port)?,
             Commands::Help => {
                 usage();
                 return Ok(());
