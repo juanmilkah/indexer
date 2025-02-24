@@ -1,12 +1,15 @@
+use std::char;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use std::{char, env};
 
+use clap::Parser;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+use self::server::run_server;
 
 mod html;
 mod lexer;
@@ -14,120 +17,52 @@ mod models;
 mod parsers;
 mod server;
 
+// use clap args parser instead
+#[derive(Parser, Debug)]
+#[command(
+    name = "Indexer",
+    about = "A minimalistic search engine",
+    version = env!("CARGO_PKG_VERSION")
+)]
+struct Args {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Parser, Debug)]
 enum Commands {
-    Query {
-        index_file: String,
-        term: String,
-    },
+    /// Build an index for a directory
     Index {
-        files_dir: String,
-        index_path: String,
-    },
-    Serve {
+        #[arg(
+            short = 'd',
+            long = "directory",
+            help = "Directory to perfom action on"
+        )]
+        directory: String,
+        #[arg(short = 'i', long = "index", help = "Path to index file")]
         index_file: String,
-        port: u32,
     },
-    Help,
-    Version,
+    /// Query some search term using the index
+    Search {
+        #[arg(short = 'i', long = "index", help = "Path to index file")]
+        index_file: String,
+        #[arg(short = 'q', long = "query", help = "Query to search")]
+        query: Option<String>,
+    },
+    /// Serve the search engine via http
+    Serve {
+        #[arg(short = 'i', long = "index", help = "Path to index file")]
+        index_file: String,
+        #[arg(short = 'p', long = "port", help = "Port number")]
+        port: Option<u32>,
+    },
+    /// Scrape the internet for data
+    Scrape {},
 }
 
 enum DocHandler {
     Indexed,
     Skipped,
-}
-
-fn entry() -> Result<Option<Commands>, ()> {
-    // Match the commadline arguments
-    //
-    // Indexing files in a directory
-    // indexer index ~/docs main_index.json
-    //
-    // Querying for a term from a directory's index
-    // indexer query main_index.json "foo bar baz"
-    //
-    // Serving the results via http
-    // indexer serve main_index.json 8989
-    // curl http://localhost:8989/
-    let mut args = env::args().skip(1).peekable();
-
-    if let Some(subcommand) = args.next() {
-        match subcommand.as_str() {
-            "query" | "-q" => {
-                if let Some(index_file) = args.next() {
-                    if let Some(term) = args.next() {
-                        Ok(Some(Commands::Query { term, index_file }))
-                    } else {
-                        usage();
-                        Ok(None)
-                    }
-                } else {
-                    usage();
-                    Ok(None)
-                }
-            }
-            "index" | "-i" => {
-                // index the provided directory and write the documents index table
-                // in the provided index file
-                // otherwise fall back to the current directory and index.json respectively
-                if let Some(dir) = args.next() {
-                    if let Some(index) = args.next() {
-                        Ok(Some(Commands::Index {
-                            files_dir: dir,
-                            index_path: index,
-                        }))
-                    } else {
-                        Ok(Some(Commands::Index {
-                            files_dir: dir,
-                            index_path: "index.json".to_string(),
-                        }))
-                    }
-                } else {
-                    Ok(Some(Commands::Index {
-                        files_dir: ".".to_string(),
-                        index_path: "index.json".to_string(),
-                    }))
-                }
-            }
-            "serve" | "-s" => {
-                if let Some(index_file) = args.next() {
-                    if let Some(port) = args.next() {
-                        let port = port.parse().unwrap_or(8080);
-                        Ok(Some(Commands::Serve { index_file, port }))
-                    } else {
-                        Ok(Some(Commands::Serve {
-                            index_file,
-                            port: 8080,
-                        }))
-                    }
-                } else {
-                    eprintln!("Missing index file path");
-                    Ok(None)
-                }
-            }
-
-            "help" | "--help" | "-h" => Ok(Some(Commands::Help)),
-            "version" | "--version" | "-v" => Ok(Some(Commands::Version)),
-            _ => {
-                usage();
-                Ok(None)
-            }
-        }
-    } else {
-        usage();
-        Ok(None)
-    }
-}
-
-fn usage() {
-    println!("USAGE: [COMMANDS] [OPTIONS]");
-    println!("Commands:");
-    println!();
-    println!("\t<query | -q> <index_path> <term>          Query for a term in documents");
-    println!("\t<index | -i> <directory> [index_path]     Create an index from a directory");
-    println!("\t<serve | -s> <index_path> [port]          Serve the responses to an http server");
-    println!();
-    println!("\t<help | -h | --help>                      Show program Usage");
-    println!("\t<version | -v | --version>                Show the program version");
 }
 
 fn search_term(term: &str, index_file: &str) -> io::Result<Vec<String>> {
@@ -168,10 +103,6 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
     }
 
     Ok(files)
-}
-
-fn version_info() {
-    println!("{version}", version = env!("CARGO_PKG_VERSION"));
 }
 
 fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
@@ -252,7 +183,7 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
         // if no then skip the file
         if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
             if !is_expired {
-                println!("Skipped {doc}");
+                println!("Skipped document: {doc}");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -290,46 +221,32 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    match entry() {
-        Ok(Some(val)) => match val {
-            Commands::Index {
-                files_dir,
-                index_path,
-            } => index_documents(&files_dir, &index_path)?,
-            Commands::Query { index_file, term } => {
-                let term_matches = match search_term(&term, &index_file) {
-                    Ok(val) => val,
-                    Err(err) => {
-                        return Err(err);
-                    }
-                };
+    let args = Args::parse();
 
-                if term_matches.is_empty() {
-                    println!("No Matches!");
-                    return Ok(());
-                }
-
-                for m in term_matches.iter() {
-                    println!("{m}");
-                }
-            }
-            Commands::Serve { index_file, port } => server::run_server(&index_file, port)?,
-            Commands::Help => {
-                usage();
-                return Ok(());
-            }
-            Commands::Version => {
-                version_info();
-                return Ok(());
-            }
-        },
-        Ok(None) => return Ok(()),
-        Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Missing Some Arguments",
-            ));
+    match args.command {
+        Commands::Index {
+            directory,
+            index_file,
+        } => {
+            index_documents(&directory, &index_file)?;
         }
-    };
+        Commands::Search { index_file, query } => {
+            if query.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Some fields missing for query",
+                ));
+            }
+            search_term(&query.unwrap(), &index_file)?;
+        }
+        Commands::Serve { index_file, port } => {
+            let port = port.unwrap_or(8765);
+
+            run_server(&index_file, port)?;
+        }
+        Commands::Scrape {} => {
+            unimplemented!()
+        }
+    }
     Ok(())
 }
