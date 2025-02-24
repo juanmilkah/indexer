@@ -8,6 +8,7 @@ use std::{char, env};
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
+mod html;
 mod lexer;
 mod models;
 mod parsers;

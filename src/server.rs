@@ -1,10 +1,8 @@
-use home::home_dir;
-use tiny_http::{Method, Response, Server};
+use tiny_http::{Header, Method, Response, Server};
 
-use std::fs::File;
 use std::io;
-use std::path::PathBuf;
 
+use crate::html::HTML_DEFAULT;
 use crate::search_term;
 
 pub fn run_server(index_file: &str, port: u32) -> io::Result<()> {
@@ -30,16 +28,8 @@ pub fn run_server(index_file: &str, port: u32) -> io::Result<()> {
                 "/" => {
                     // respond with the index.html file from the .indexer directory
                     // or the current directory in the case of development
-                    let html_file = home_dir()
-                        .unwrap_or(PathBuf::from("."))
-                        .join(".indexer")
-                        .join("index.html")
-                        .to_string_lossy()
-                        .to_string();
-
-                    let file =
-                        File::open(&html_file).unwrap_or(File::open("./index.html").unwrap());
-                    let response = Response::from_file(file);
+                    let header = Header::from_bytes("Content-Type", "text/html").unwrap();
+                    let response = Response::from_string(HTML_DEFAULT).with_header(header);
                     let _ = request.respond(response);
                 }
                 _ => {
