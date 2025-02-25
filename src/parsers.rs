@@ -1,10 +1,9 @@
 use poppler::PopplerDocument;
 use scraper::{Html, Selector};
-use xml::EventReader;
 use xml::reader::XmlEvent;
+use xml::EventReader;
 
 use crate::lexer::Lexer;
-use crate::models::*;
 
 use std::fs::{self, File};
 use std::io::{self, BufReader};
@@ -23,9 +22,10 @@ pub fn remove_stop_words(tokens: &[String]) -> Vec<String> {
     cleaned
 }
 
-pub fn index_html_document(model: &mut Model, filepath: &str, content: &str) -> io::Result<()> {
+pub fn parse_html_document(filepath: &str) -> io::Result<Vec<String>> {
     println!("Indexing document: {filepath}");
-    let document = Html::parse_document(content);
+    let content = fs::read_to_string(filepath)?;
+    let document = Html::parse_document(&content);
     let selector = Selector::parse("body").unwrap();
 
     let body = document.select(&selector).next().unwrap();
@@ -42,18 +42,17 @@ pub fn index_html_document(model: &mut Model, filepath: &str, content: &str) -> 
     while let Some(token) = lex.by_ref().next() {
         tokens.push(token);
     }
-    let tokens = remove_stop_words(&tokens);
-    model.add_document(filepath, &tokens);
-    Ok(())
+    Ok(remove_stop_words(&tokens))
 }
 
-pub fn index_xml_document(model: &mut Model, filepath: &str) -> io::Result<()> {
+pub fn parse_xml_document(filepath: &str) -> io::Result<Vec<String>> {
     println!("Indexing document: {filepath}");
 
     let file = File::open(filepath)?;
     let file = BufReader::new(file);
 
     let parser = EventReader::new(file);
+    let mut tokens = Vec::new();
 
     for e in parser {
         match e {
@@ -61,14 +60,9 @@ pub fn index_xml_document(model: &mut Model, filepath: &str) -> io::Result<()> {
                 let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
                 let mut lex = Lexer::new(&text_chars);
 
-                let mut tokens = Vec::new();
-
                 while let Some(token) = lex.by_ref().next() {
                     tokens.push(token);
                 }
-
-                let tokens = remove_stop_words(&tokens);
-                model.add_document(filepath, &tokens);
             }
             Err(err) => {
                 eprintln!("{err}");
@@ -78,10 +72,10 @@ pub fn index_xml_document(model: &mut Model, filepath: &str) -> io::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(remove_stop_words(&tokens))
 }
 
-pub fn index_pdf_document(model: &mut Model, filepath: &str) -> io::Result<()> {
+pub fn parse_pdf_document(filepath: &str) -> io::Result<Vec<String>> {
     println!("Indexing document: {filepath}");
     let document = match PopplerDocument::new_from_file(filepath, None) {
         Ok(doc) => doc,
@@ -95,32 +89,24 @@ pub fn index_pdf_document(model: &mut Model, filepath: &str) -> io::Result<()> {
     };
 
     let end = document.get_n_pages();
-    let mut whole_doc = String::new();
+    let mut tokens = Vec::new();
 
     for i in 1..end {
         if let Some(page) = document.get_page(i) {
             if let Some(text) = page.get_text() {
-                whole_doc.push_str(text);
+                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
+                let mut lex = Lexer::new(&text_chars);
+                while let Some(token) = lex.by_ref().next() {
+                    tokens.push(token);
+                }
             }
         }
     }
-    let text_chars = whole_doc.to_lowercase().chars().collect::<Vec<char>>();
-    let mut tokens = Vec::new();
-    {
-        let mut lex = Lexer::new(&text_chars);
 
-        while let Some(token) = lex.by_ref().next() {
-            tokens.push(token);
-        }
-
-        tokens = remove_stop_words(&tokens);
-    }
-    model.add_document(filepath, &tokens);
-
-    Ok(())
+    Ok(remove_stop_words(&tokens))
 }
 
-pub fn index_text_document(model: &mut Model, filepath: &str) -> io::Result<()> {
+pub fn parse_txt_document(filepath: &str) -> io::Result<Vec<String>> {
     println!("Indexing {filepath}...");
     let content = match fs::read_to_string(filepath) {
         Ok(val) => val,
@@ -137,8 +123,5 @@ pub fn index_text_document(model: &mut Model, filepath: &str) -> io::Result<()> 
         tokens.push(token);
     }
 
-    let tokens = remove_stop_words(&tokens);
-    model.add_document(filepath, &tokens);
-
-    Ok(())
+    Ok(remove_stop_words(&tokens))
 }

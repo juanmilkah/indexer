@@ -2,7 +2,6 @@ use std::char;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -56,11 +55,6 @@ enum Commands {
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u32>,
     },
-}
-
-enum DocHandler {
-    Indexed,
-    Skipped,
 }
 
 fn search_term(term: &str, index_file: &str) -> io::Result<Vec<String>> {
@@ -121,48 +115,48 @@ fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<b
     None
 }
 
-fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<DocHandler> {
+fn parse_doc_by_extension(doc: &str) -> io::Result<Option<Vec<String>>> {
     let doc_extension = Path::new(&doc).extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
-            "pdf" => match parsers::index_pdf_document(model, doc) {
-                Ok(()) => Ok(DocHandler::Indexed),
+            "pdf" => match parsers::parse_pdf_document(doc) {
+                Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
                 }
             },
-            "xml" | "xhtml" => match parsers::index_xml_document(model, doc) {
-                Ok(()) => Ok(DocHandler::Indexed),
+            "xml" | "xhtml" => match parsers::parse_xml_document(doc) {
+                Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
                 }
             },
-            "html" => {
-                let content = fs::read_to_string(doc)?;
-                match parsers::index_html_document(model, &content, doc) {
-                    Ok(()) => Ok(DocHandler::Indexed),
-                    Err(err) => {
-                        eprintln!("Failed to index {doc}: {err}");
-                        Err(err)
-                    }
+            "html" => match parsers::parse_html_document(doc) {
+                Ok(tokens) => Ok(Some(tokens)),
+                Err(err) => {
+                    eprintln!("Failed to index {doc}: {err}");
+                    Err(err)
                 }
-            }
+            },
 
-            "txt" | "md" => match parsers::index_text_document(model, doc) {
-                Ok(()) => Ok(DocHandler::Indexed),
+            "txt" | "md" => match parsers::parse_txt_document(doc) {
+                Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Failed to index {doc}: {err}");
                     Err(err)
                 }
             },
             _ => {
-                eprintln!("Skipped {doc}");
-                Ok(DocHandler::Skipped)
+                eprintln!("Skipped document: {doc}");
+                Ok(None)
             }
         },
-        None => Ok(DocHandler::Skipped),
+        None => {
+            eprintln!("Skipped document: {doc}");
+            Ok(None)
+        }
     }
 }
 
@@ -173,8 +167,6 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
 
     // process the documents in parallel
     let model = Arc::new(Mutex::new(models::Model::new(index_table)));
-    let indexed_docs = Arc::new(AtomicUsize::new(0));
-    let skipped = Arc::new(AtomicUsize::new(0));
 
     docs.par_iter().for_each(|doc| {
         // check if document index exists in the index_table;
@@ -185,20 +177,21 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
         if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
             if !is_expired {
                 println!("Skipped document: {doc}");
-                skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
 
         //match the document's file extension and index it accordingly
-        match index_doc_by_extension(&mut model.lock().unwrap(), doc) {
-            Ok(DocHandler::Skipped) => skipped.fetch_add(1, Ordering::Relaxed),
-            Ok(DocHandler::Indexed) => indexed_docs.fetch_add(1, Ordering::Relaxed),
-            Err(e) => {
-                eprintln!("{e}");
-                0
+        match parse_doc_by_extension(doc) {
+            Ok(Some(tokens)) => {
+                let mut model = model.lock().unwrap();
+                model.add_document(doc, &tokens)
             }
-        };
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("Failed to parse document: {doc}: {e}")
+            }
+        }
     });
     //
     // update the models idf
@@ -206,14 +199,6 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
 
     // write the documents index_table in the provided file path
 
-    println!(
-        "Indexed {indexed_docs} documents!",
-        indexed_docs = indexed_docs.load(Ordering::Relaxed)
-    );
-    println!(
-        "Skipped {skipped} documents!",
-        skipped = skipped.load(Ordering::Relaxed)
-    );
     println!("Writing into {index_path}...");
     let file = BufWriter::new(File::create(index_path)?);
     serde_json::to_writer(file, &model.lock().unwrap().index_table)?;
