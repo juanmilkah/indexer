@@ -56,8 +56,6 @@ enum Commands {
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u32>,
     },
-    /// Scrape the internet for data
-    Scrape {},
 }
 
 enum DocHandler {
@@ -141,13 +139,16 @@ fn index_doc_by_extension(model: &mut models::Model, doc: &str) -> io::Result<Do
                     Err(err)
                 }
             },
-            "html" => match parsers::index_html_document(model, doc) {
-                Ok(()) => Ok(DocHandler::Indexed),
-                Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
-                    Err(err)
+            "html" => {
+                let content = fs::read_to_string(doc)?;
+                match parsers::index_html_document(model, &content, doc) {
+                    Ok(()) => Ok(DocHandler::Indexed),
+                    Err(err) => {
+                        eprintln!("Failed to index {doc}: {err}");
+                        Err(err)
+                    }
                 }
-            },
+            }
 
             "txt" | "md" => match parsers::index_text_document(model, doc) {
                 Ok(()) => Ok(DocHandler::Indexed),
@@ -243,9 +244,6 @@ fn main() -> io::Result<()> {
             let port = port.unwrap_or(8765);
 
             run_server(&index_file, port)?;
-        }
-        Commands::Scrape {} => {
-            unimplemented!()
         }
     }
     Ok(())

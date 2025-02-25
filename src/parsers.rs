@@ -1,7 +1,7 @@
 use poppler::PopplerDocument;
 use scraper::{Html, Selector};
-use xml::reader::XmlEvent;
 use xml::EventReader;
+use xml::reader::XmlEvent;
 
 use crate::lexer::Lexer;
 use crate::models::*;
@@ -23,10 +23,9 @@ pub fn remove_stop_words(tokens: &[String]) -> Vec<String> {
     cleaned
 }
 
-pub fn index_html_document(model: &mut Model, filepath: &str) -> io::Result<()> {
+pub fn index_html_document(model: &mut Model, filepath: &str, content: &str) -> io::Result<()> {
     println!("Indexing document: {filepath}");
-    let file = fs::read_to_string(filepath)?;
-    let document = Html::parse_document(&file);
+    let document = Html::parse_document(content);
     let selector = Selector::parse("body").unwrap();
 
     let body = document.select(&selector).next().unwrap();
