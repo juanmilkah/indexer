@@ -3,20 +3,27 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-pub type DocIndex = HashMap<String, f32>;
-
 #[derive(Serialize, Deserialize)]
+/// A Representation of all the indexed documents
 pub struct IndexTable {
+    /// The number of documents in the index Table
     pub docs_count: u64,
+    /// A Hashmap of the individual document indexes
     pub tables: HashMap<String, DocTable>,
 }
 
 #[derive(Serialize, Deserialize)]
+/// Individual document index
 pub struct DocTable {
+    /// Time the document was last indexed
     pub indexed_at: SystemTime,
+    /// Number of words in the document after stemming
     pub word_count: u64,
+    /// A hashmap of words and their count in the document
     pub doc_index: DocIndex,
 }
+
+pub type DocIndex = HashMap<String, f32>;
 
 impl IndexTable {
     pub fn new() -> Self {
@@ -28,6 +35,7 @@ impl IndexTable {
 }
 
 #[derive(Serialize, Deserialize)]
+/// The Document Model containing the index table for all the documents and their metadata
 pub struct Model {
     pub index_table: IndexTable,
 }

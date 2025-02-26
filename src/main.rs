@@ -53,7 +53,7 @@ enum Commands {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
         index_file: String,
         #[arg(short = 'p', long = "port", help = "Port number")]
-        port: Option<u32>,
+        port: Option<u16>,
     },
 }
 

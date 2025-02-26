@@ -5,7 +5,7 @@ use std::io;
 use crate::html::HTML_DEFAULT;
 use crate::search_term;
 
-pub fn run_server(index_file: &str, port: u32) -> io::Result<()> {
+pub fn run_server(index_file: &str, port: u16) -> io::Result<()> {
     let port = format!("localhost:{port}");
     let server = match Server::http(&port) {
         Ok(val) => val,
