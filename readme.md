@@ -30,22 +30,21 @@ bash build.sh
 
 - ### Indexing
   If path to docs is not provided it falls back to the current directory.  
-  If the path to index file is not specified the fallback is `index_file`.  
   Supported file types:  
   (pdf, txt, md, xml, xhtml, html)
 
 ```bash
-indexer index [path_to_documents_directory] [path_to_index_file]
+indexer index -d <path_to_documents_directory> -i <path_to_index_file>
 ```
 
 - ### Querying
 
 ```bash
-indexer query <path_to_index_file> <query>
+indexer query -i <path_to_index_file> -q <query>
 ```
 
 ```console
-indexer query docs_index_file "foo bar baz" | less
+indexer query -i docs_index_file -q "foo bar baz" | less
 ```
 
 - ### Serving via http server
@@ -53,7 +52,7 @@ indexer query docs_index_file "foo bar baz" | less
   The average latency for a query is `45ms`
 
 ```bash
-indexer serve <path_to_index_file> [port]
+indexer serve -i <path_to_index_file> -p [port]
 ```
 
 ```bash
