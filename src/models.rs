@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -8,8 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct IndexTable {
     /// The number of documents in the index Table
     pub docs_count: u64,
-    /// A Hashmap of the individual document indexes
-    pub tables: HashMap<String, DocTable>,
+    /// A HashMap of the individual document indexes
+    pub tables: FxHashMap<PathBuf, DocTable>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -23,13 +25,13 @@ pub struct DocTable {
     pub doc_index: DocIndex,
 }
 
-pub type DocIndex = HashMap<String, f32>;
+pub type DocIndex = FxHashMap<String, f32>;
 
 impl IndexTable {
     pub fn new() -> Self {
         Self {
             docs_count: 0,
-            tables: HashMap::new(),
+            tables: FxHashMap::default(),
         }
     }
 }
@@ -45,8 +47,8 @@ impl Model {
         Self { index_table }
     }
 
-    pub fn add_document(&mut self, doc: &str, tokens: &[String]) {
-        let mut doc_index = DocIndex::new();
+    pub fn add_document(&mut self, doc: &Path, tokens: &[String]) {
+        let mut doc_index = DocIndex::default();
         let word_count = tokens.len() as f64;
 
         //calculate term frequencies
@@ -67,33 +69,36 @@ impl Model {
                 word_count: word_count as u64,
                 doc_index,
             };
-            self.index_table.tables.insert(doc.to_string(), doc_table);
+            self.index_table.tables.insert(doc.to_path_buf(), doc_table);
             self.index_table.docs_count += 1;
         }
     }
 
     pub fn update_idf(&mut self) {
         let docs_count = self.index_table.docs_count as f32;
-        let mut term_doc_freq = HashMap::new();
+        let mut term_doc_freq = FxHashMap::default();
 
         //calculate the document freq for each term
         for doc_table in self.index_table.tables.values_mut() {
             for term in doc_table.doc_index.keys() {
-                *term_doc_freq.entry(term.clone()).or_insert(1.0) += 1.0;
+                *term_doc_freq.entry(term.clone()).or_insert(0.0) += 1.0;
             }
         }
 
-        // update the tf-idf scores
-        for doc_table in self.index_table.tables.values_mut() {
-            for (term, tf) in doc_table.doc_index.iter_mut() {
-                let doc_freq = *term_doc_freq.get(term).unwrap_or(&1.0) as f32;
-                let idf: f32 = (docs_count / doc_freq).ln().abs();
-                *tf *= idf;
-            }
-        }
+        // update the tf-idf scores in parallel
+        self.index_table
+            .tables
+            .par_iter_mut()
+            .for_each(|(_, doc_table)| {
+                for (term, tf) in doc_table.doc_index.iter_mut() {
+                    let doc_freq = *term_doc_freq.get(term).unwrap_or(&0.0) as f32;
+                    let idf: f32 = (docs_count / doc_freq).ln().abs();
+                    *tf *= idf;
+                }
+            });
     }
 
-    pub fn search_terms(&self, tokens: &[String]) -> Vec<String> {
+    pub fn search_terms(&self, tokens: &[String]) -> Vec<PathBuf> {
         let mut results = Vec::new();
 
         for (doc_id, doc_table) in self.index_table.tables.iter() {
@@ -116,7 +121,7 @@ impl Model {
 
         sorted_results
             .iter()
-            .map(|(doc_id, _)| doc_id.to_string())
-            .collect::<Vec<String>>()
+            .map(|(doc_id, _)| doc_id.to_path_buf())
+            .collect::<Vec<PathBuf>>()
     }
 }

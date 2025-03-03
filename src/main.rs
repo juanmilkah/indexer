@@ -57,7 +57,7 @@ enum Commands {
     },
 }
 
-fn search_term(term: &str, index_file: &str) -> io::Result<Vec<String>> {
+fn search_term(term: &str, index_file: &str) -> io::Result<Vec<PathBuf>> {
     let file = BufReader::new(File::open(index_file)?);
     let index_table: models::IndexTable = serde_json::from_reader(file)?;
 
@@ -77,7 +77,7 @@ fn search_term(term: &str, index_file: &str) -> io::Result<Vec<String>> {
     Ok(result)
 }
 
-fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
+fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     if files_dir.is_dir() {
@@ -89,7 +89,7 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<String>> {
                 let mut subdir_files = read_files_recursively(&path)?;
                 files.append(&mut subdir_files);
             } else {
-                files.push(path.to_string_lossy().to_string());
+                files.push(path);
             }
         }
     }
@@ -103,7 +103,7 @@ fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
     Ok(index_table)
 }
 
-fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<bool> {
+fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Option<bool> {
     if let Some(doc_table) = index_table.tables.get(doc) {
         let now = SystemTime::now();
         let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
@@ -115,28 +115,28 @@ fn doc_index_is_expired(doc: &str, index_table: &models::IndexTable) -> Option<b
     None
 }
 
-fn parse_doc_by_extension(doc: &str) -> io::Result<Option<Vec<String>>> {
-    let doc_extension = Path::new(&doc).extension();
+fn parse_doc_by_extension(doc: &Path) -> io::Result<Option<Vec<String>>> {
+    let doc_extension = doc.extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
             "pdf" => match parsers::parse_pdf_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
+                    eprintln!("Skipped document: {:?}", doc);
                     Err(err)
                 }
             },
             "xml" | "xhtml" => match parsers::parse_xml_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
+                    eprintln!("Skipped document: {:?}", doc);
                     Err(err)
                 }
             },
             "html" => match parsers::parse_html_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
+                    eprintln!("Skipped document: {:?}", doc);
                     Err(err)
                 }
             },
@@ -144,17 +144,17 @@ fn parse_doc_by_extension(doc: &str) -> io::Result<Option<Vec<String>>> {
             "txt" | "md" => match parsers::parse_txt_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Failed to index {doc}: {err}");
+                    eprintln!("Skipped document: {:?}", doc);
                     Err(err)
                 }
             },
             _ => {
-                eprintln!("Skipped document: {doc}");
+                eprintln!("Skipped document: {:?}", doc);
                 Ok(None)
             }
         },
         None => {
-            eprintln!("Skipped document: {doc}");
+            eprintln!("Skipped document: {:?}", doc);
             Ok(None)
         }
     }
@@ -176,7 +176,7 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
         // if no then skip the file
         if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
             if !is_expired {
-                println!("Skipped document: {doc}");
+                println!("Skipped document: {:?}", doc);
                 return;
             }
         }
@@ -189,7 +189,7 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("Failed to parse document: {doc}: {e}")
+                eprintln!("Failed to parse document: {:?}: {e}", doc)
             }
         }
     });
@@ -198,7 +198,6 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
     model.lock().unwrap().update_idf();
 
     // write the documents index_table in the provided file path
-
     println!("Writing into {index_path}...");
     let file = BufWriter::new(File::create(index_path)?);
     serde_json::to_writer(file, &model.lock().unwrap().index_table)?;

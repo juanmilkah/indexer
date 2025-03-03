@@ -48,8 +48,14 @@ pub fn run_server(index_file: &str, port: u16) -> io::Result<()> {
                     match search_term(&body, index_file) {
                         Ok(vals) => {
                             if !vals.is_empty() {
-                                let vals = vals.join("\n").to_string();
-                                let response = Response::from_string(vals);
+                                let vals: Vec<u8> = vals
+                                    .iter()
+                                    .flat_map(|path| {
+                                        let path = path.to_string_lossy();
+                                        path.as_bytes().to_vec()
+                                    })
+                                    .collect();
+                                let response = Response::from_data(vals);
                                 let _ = request.respond(response);
                             } else {
                                 let _ = request.respond(Response::from_string("Zero matches!"));
