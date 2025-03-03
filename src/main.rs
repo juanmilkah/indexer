@@ -76,6 +76,10 @@ fn search_term(term: &str, index_file: &str) -> anyhow::Result<Vec<PathBuf>> {
     let model = models::Model::new(index_table);
     let result = model.search_terms(&tokens);
 
+    if result.is_empty() {
+        println!("No results!");
+    }
+
     result.iter().for_each(|r| println!("{:?}", r));
 
     Ok(result)
