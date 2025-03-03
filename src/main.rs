@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use anyhow::Context;
 use clap::Parser;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
@@ -57,9 +58,10 @@ enum Commands {
     },
 }
 
-fn search_term(term: &str, index_file: &str) -> io::Result<Vec<PathBuf>> {
+fn search_term(term: &str, index_file: &str) -> anyhow::Result<Vec<PathBuf>> {
     let file = BufReader::new(File::open(index_file)?);
-    let index_table: models::IndexTable = serde_json::from_reader(file)?;
+    let index_table: models::IndexTable =
+        bincode::deserialize_from(file).context("deserialising model from file")?;
 
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = lexer::Lexer::new(&text_chars);
@@ -77,7 +79,7 @@ fn search_term(term: &str, index_file: &str) -> io::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<PathBuf>> {
+fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     if files_dir.is_dir() {
@@ -97,9 +99,10 @@ fn read_files_recursively(files_dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn get_index_table(filepath: &str) -> io::Result<models::IndexTable> {
+fn get_index_table(filepath: &str) -> anyhow::Result<models::IndexTable> {
     let index_file = File::open(filepath)?;
-    let index_table: models::IndexTable = serde_json::from_reader(&index_file)?;
+    let index_table: models::IndexTable =
+        bincode::deserialize_from(&index_file).context("deserializing model from file")?;
     Ok(index_table)
 }
 
@@ -115,7 +118,7 @@ fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Opti
     None
 }
 
-fn parse_doc_by_extension(doc: &Path) -> io::Result<Option<Vec<String>>> {
+fn parse_doc_by_extension(doc: &Path) -> anyhow::Result<Option<Vec<String>>> {
     let doc_extension = doc.extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
@@ -123,21 +126,21 @@ fn parse_doc_by_extension(doc: &Path) -> io::Result<Option<Vec<String>>> {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Skipped document: {:?}", doc);
-                    Err(err)
+                    Err(err.into())
                 }
             },
             "xml" | "xhtml" => match parsers::parse_xml_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Skipped document: {:?}", doc);
-                    Err(err)
+                    Err(err.into())
                 }
             },
             "html" => match parsers::parse_html_document(doc) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Skipped document: {:?}", doc);
-                    Err(err)
+                    Err(err.into())
                 }
             },
 
@@ -145,7 +148,7 @@ fn parse_doc_by_extension(doc: &Path) -> io::Result<Option<Vec<String>>> {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
                     eprintln!("Skipped document: {:?}", doc);
-                    Err(err)
+                    Err(err.into())
                 }
             },
             _ => {
@@ -160,7 +163,7 @@ fn parse_doc_by_extension(doc: &Path) -> io::Result<Option<Vec<String>>> {
     }
 }
 
-fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
+fn index_documents(files_dir: &str, index_path: &str) -> anyhow::Result<()> {
     let files_dir = PathBuf::from(files_dir);
     let docs = read_files_recursively(&files_dir)?;
     let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());
@@ -200,12 +203,13 @@ fn index_documents(files_dir: &str, index_path: &str) -> io::Result<()> {
     // write the documents index_table in the provided file path
     println!("Writing into {index_path}...");
     let file = BufWriter::new(File::create(index_path)?);
-    serde_json::to_writer(file, &model.lock().unwrap().index_table)?;
+    bincode::serialize_into(file, &model.lock().unwrap().index_table)
+        .context("serializing model")?;
 
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     match args.command {
@@ -217,10 +221,10 @@ fn main() -> io::Result<()> {
         }
         Commands::Search { index_file, query } => {
             if query.is_none() {
-                return Err(io::Error::new(
+                return Err(anyhow::Error::new(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "Some fields missing for query",
-                ));
+                    "Some fields missing for search",
+                )));
             }
             search_term(&query.unwrap(), &index_file)?;
         }

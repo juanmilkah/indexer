@@ -1,5 +1,7 @@
 # Local Search Engine
 
+![Flamegraph](flamegraph.svg)
+
 A search engine for local directories implemented in Rust.  
 It employs the [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) algorithm for file indexing, [snowball](https://snowballstem.org/) stemming algorithms for token stemming.
 
@@ -28,7 +30,7 @@ bash build.sh
 
 - ### Indexing
   If path to docs is not provided it falls back to the current directory.  
-  If the path to index file is not specified the fallback is `index.json`.  
+  If the path to index file is not specified the fallback is `index_file`.  
   Supported file types:  
   (pdf, txt, md, xml, xhtml, html)
 
@@ -39,11 +41,11 @@ indexer index [path_to_documents_directory] [path_to_index_file]
 - ### Querying
 
 ```bash
-indexer query <path_to_index.json> <query>
+indexer query <path_to_index_file> <query>
 ```
 
 ```console
-indexer query docs_index.json "foo bar baz" | less
+indexer query docs_index_file "foo bar baz" | less
 ```
 
 - ### Serving via http server

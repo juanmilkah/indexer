@@ -1,4 +1,7 @@
 /target
 # todo files
 todo
-*.json
+index_file
+
+# perf data
+perf*
