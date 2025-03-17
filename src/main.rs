@@ -1,7 +1,8 @@
 use std::char;
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -25,8 +26,17 @@ mod server;
     version = env!("CARGO_PKG_VERSION")
 )]
 struct Args {
+    /// The key functionality commands
     #[command(subcommand)]
     command: Commands,
+
+    /// Redirect Stderr and Stdout to a file descriptor
+    #[arg(
+        short = 'l',
+        long = "log",
+        help = "Redirect Stderr and Stdout to a file"
+    )]
+    log_file: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -38,27 +48,75 @@ enum Commands {
             long = "directory",
             help = "Directory to perfom action on"
         )]
-        directory: String,
-        #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: String,
+        directory: PathBuf,
+        #[arg(short = 'o', long = "output", help = "Path to index file")]
+        output_file: PathBuf,
     },
     /// Query some search term using the index
     Search {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: String,
+        index_file: PathBuf,
         #[arg(short = 'q', long = "query", help = "Query to search")]
-        query: Option<String>,
+        query: String,
+        #[arg(short = 'o', long = "output", help = "Write result to file")]
+        output_file: Option<PathBuf>,
     },
     /// Serve the search engine via http
     Serve {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: String,
+        index_file: PathBuf,
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u16>,
     },
 }
 
-fn search_term(term: &str, index_file: &str) -> anyhow::Result<Vec<PathBuf>> {
+pub struct ErrorHandler {
+    stream: ErrorStream,
+}
+
+enum ErrorStream {
+    File(PathBuf),
+    Stderr,
+}
+
+impl ErrorHandler {
+    fn new(error_stream: ErrorStream) -> Self {
+        Self {
+            stream: error_stream,
+        }
+    }
+
+    fn print(&mut self, err: &str) {
+        match &self.stream {
+            ErrorStream::Stderr => {
+                eprintln!("{:?}", err);
+            }
+            ErrorStream::File(f) => {
+                let mut file = match fs::OpenOptions::new().create(true).append(true).open(f) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        return;
+                    }
+                };
+
+                match writeln!(&mut file, "{}", err) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        eprintln!("ERROR WRITING TO LOG FILE: {}", e);
+                        eprintln!("{}", err);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn search_term(
+    term: &str,
+    index_file: &Path,
+    output_file: Option<PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
     let file = BufReader::new(File::open(index_file)?);
     let index_table: models::IndexTable =
         bincode::deserialize_from(file).context("deserialising model from file")?;
@@ -80,7 +138,16 @@ fn search_term(term: &str, index_file: &str) -> anyhow::Result<Vec<PathBuf>> {
         println!("No results!");
     }
 
-    result.iter().for_each(|r| println!("{:?}", r));
+    if let Some(ref f) = output_file {
+        let result = result
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<String>>()
+            .join("\n");
+        fs::write(f, result)?;
+    } else {
+        result.iter().for_each(|r| println!("{:?}", r));
+    }
 
     Ok(result)
 }
@@ -105,7 +172,7 @@ fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn get_index_table(filepath: &str) -> anyhow::Result<models::IndexTable> {
+fn get_index_table(filepath: &Path) -> anyhow::Result<models::IndexTable> {
     let index_file = File::open(filepath)?;
     let index_table: models::IndexTable =
         bincode::deserialize_from(&index_file).context("deserializing model from file")?;
@@ -124,58 +191,86 @@ fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Opti
     None
 }
 
-fn parse_doc_by_extension(doc: &Path) -> anyhow::Result<Option<Vec<String>>> {
+fn parse_doc_by_extension(
+    doc: &Path,
+    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+) -> anyhow::Result<Option<Vec<String>>> {
     let doc_extension = doc.extension();
     match doc_extension {
         Some(ext) => match ext.to_str().unwrap() {
-            "pdf" => match parsers::parse_pdf_document(doc) {
+            "pdf" => match parsers::parse_pdf_document(doc, Arc::clone(&err_handler)) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Skipped document: {:?}", doc);
+                    err_handler
+                        .lock()
+                        .unwrap()
+                        .print(&format!("Skipped document: {:?}", doc));
                     Err(err.into())
                 }
             },
-            "xml" | "xhtml" => match parsers::parse_xml_document(doc) {
+            "xml" | "xhtml" => match parsers::parse_xml_document(doc, Arc::clone(&err_handler)) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Skipped document: {:?}", doc);
+                    err_handler
+                        .lock()
+                        .unwrap()
+                        .print(&format!("Skipped document: {:?}", doc));
                     Err(err.into())
                 }
             },
-            "html" => match parsers::parse_html_document(doc) {
+            "html" => match parsers::parse_html_document(doc, Arc::clone(&err_handler)) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Skipped document: {:?}", doc);
+                    err_handler
+                        .lock()
+                        .unwrap()
+                        .print(&format!("Skipped document: {:?}", doc));
                     Err(err.into())
                 }
             },
 
-            "txt" | "md" => match parsers::parse_txt_document(doc) {
+            "txt" | "md" => match parsers::parse_txt_document(doc, Arc::clone(&err_handler)) {
                 Ok(tokens) => Ok(Some(tokens)),
                 Err(err) => {
-                    eprintln!("Skipped document: {:?}", doc);
+                    err_handler
+                        .lock()
+                        .unwrap()
+                        .print(&format!("Skipped document: {:?}", doc));
                     Err(err.into())
                 }
             },
             _ => {
-                eprintln!("Skipped document: {:?}", doc);
+                err_handler
+                    .lock()
+                    .unwrap()
+                    .print(&format!("Skipped document: {:?}", doc));
                 Ok(None)
             }
         },
         None => {
-            eprintln!("Skipped document: {:?}", doc);
+            err_handler
+                .lock()
+                .unwrap()
+                .print(&format!("Skipped document: {:?}", doc));
             Ok(None)
         }
     }
 }
 
-fn index_documents(files_dir: &str, index_path: &str) -> anyhow::Result<()> {
+fn index_documents(
+    files_dir: &Path,
+    index_path: &Path,
+    error_handler: &mut ErrorHandler,
+) -> anyhow::Result<()> {
     let files_dir = PathBuf::from(files_dir);
     let docs = read_files_recursively(&files_dir)?;
     let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());
 
     // process the documents in parallel
     let model = Arc::new(Mutex::new(models::Model::new(index_table)));
+    let skipped_files = AtomicU64::new(0);
+    let indexed_files = AtomicU64::new(0);
+    let err_handler = Arc::new(Mutex::new(error_handler));
 
     docs.par_iter().for_each(|doc| {
         // check if document index exists in the index_table;
@@ -185,20 +280,32 @@ fn index_documents(files_dir: &str, index_path: &str) -> anyhow::Result<()> {
         // if no then skip the file
         if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
             if !is_expired {
-                println!("Skipped document: {:?}", doc);
+                let err_handler = Arc::clone(&err_handler);
+                err_handler
+                    .lock()
+                    .unwrap()
+                    .print(&format!("Skipped document: {:?}", doc));
                 return;
             }
         }
 
         //match the document's file extension and index it accordingly
-        match parse_doc_by_extension(doc) {
+        match parse_doc_by_extension(doc, Arc::clone(&err_handler)) {
             Ok(Some(tokens)) => {
+                indexed_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let mut model = model.lock().unwrap();
                 model.add_document(doc, &tokens)
             }
-            Ok(None) => {}
+            Ok(None) => {
+                skipped_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             Err(e) => {
-                eprintln!("Failed to parse document: {:?}: {e}", doc)
+                skipped_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let err_handler = Arc::clone(&err_handler);
+                err_handler
+                    .lock()
+                    .unwrap()
+                    .print(&format!("Failed to parse document: {:?}: {e}", doc));
             }
         }
     });
@@ -206,38 +313,52 @@ fn index_documents(files_dir: &str, index_path: &str) -> anyhow::Result<()> {
     // update the models idf
     model.lock().unwrap().update_idf();
 
+    {
+        println!("Completed Indexing!");
+        println!("Writing into {:?}...", index_path);
+    }
     // write the documents index_table in the provided file path
-    println!("Writing into {index_path}...");
     let file = BufWriter::new(File::create(index_path)?);
     bincode::serialize_into(file, &model.lock().unwrap().index_table)
         .context("serializing model")?;
+
+    println!(
+        "Indexed {} files",
+        indexed_files.load(std::sync::atomic::Ordering::SeqCst)
+    );
+    println!(
+        "Skipped {} files",
+        skipped_files.load(std::sync::atomic::Ordering::SeqCst)
+    );
 
     Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let mut error_handler = match args.log_file {
+        Some(file) => ErrorHandler::new(ErrorStream::File(file)),
+        None => ErrorHandler::new(ErrorStream::Stderr),
+    };
 
     match args.command {
         Commands::Index {
             directory,
-            index_file,
+            output_file,
         } => {
-            index_documents(&directory, &index_file)?;
+            index_documents(&directory, &output_file, &mut error_handler)?;
         }
-        Commands::Search { index_file, query } => {
-            if query.is_none() {
-                return Err(anyhow::Error::new(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Some fields missing for search",
-                )));
-            }
-            search_term(&query.unwrap(), &index_file)?;
+        Commands::Search {
+            index_file,
+            query,
+            output_file,
+        } => {
+            search_term(&query, &index_file, output_file)?;
         }
         Commands::Serve { index_file, port } => {
             let port = port.unwrap_or(8765);
 
-            run_server(&index_file, port)?;
+            run_server(&index_file, port, &mut error_handler)?;
         }
     }
     Ok(())

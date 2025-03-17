@@ -34,17 +34,19 @@ bash build.sh
   (pdf, txt, md, xml, xhtml, html)
 
 ```bash
-indexer index -d <path_to_documents_directory> -i <path_to_index_file>
+indexer index -d <path_to_documents_directory> -o <path_to_output_file>
+```
+
+You can also redirect Stderr to a file via the `log` argument.
+
+```bash
+indexer -l indexer.log index -d <~/documents> -o <output_file>
 ```
 
 - ### Querying
 
 ```bash
-indexer query -i <path_to_index_file> -q <query>
-```
-
-```console
-indexer query -i docs_index_file -q "foo bar baz" | less
+indexer query -i <path_to_index_file> -q <query> -o [output_file]
 ```
 
 - ### Serving via http server
