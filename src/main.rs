@@ -262,6 +262,7 @@ fn index_documents(
     index_path: &Path,
     error_handler: &mut ErrorHandler,
 ) -> anyhow::Result<()> {
+    println!("Indexing documents...");
     let files_dir = PathBuf::from(files_dir);
     let docs = read_files_recursively(&files_dir)?;
     let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());

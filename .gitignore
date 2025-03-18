@@ -1,7 +1,9 @@
 /target
 # todo files
 todo
-index_file
+
+# log files
+*.log
 
 # perf data
 perf*
