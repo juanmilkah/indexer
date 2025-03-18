@@ -10,8 +10,10 @@ license = "GNU/GPL3"
 anyhow = "1.0.97"
 bincode = "1.3.3"
 clap = { version = "4.5.30", features = ["derive"] }
+csv = "1.3.1"
 home = "0.5.11"
 html5ever = "0.29.1"
+jemallocator = "0.3.2"
 poppler = "0.6.0"
 rayon = "1.10.0"
 rust-stemmers = "1.2.0"
@@ -21,3 +23,10 @@ serde = { version = "1.0.217", features = ["derive"] }
 stop-words = "0.8.1"
 tiny_http = "0.11.0"
 xml = "0.8.20"
+
+# Optimizations heavily borrow from this blog
+# https://deterministic.space/high-performance-rust.html
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"

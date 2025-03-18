@@ -31,16 +31,16 @@ bash build.sh
 - ### Indexing
   If path to docs is not provided it falls back to the current directory.  
   Supported file types:  
-  (pdf, txt, md, xml, xhtml, html)
+  (pdf, txt, md, xml, xhtml, html, csv)
 
 ```bash
-indexer index -d <path_to_documents_directory> -o <path_to_output_file>
+indexer index -p <path_to_document> -o <path_to_output_file>
 ```
 
 You can also redirect Stderr to a file via the `log` argument.
 
 ```bash
-indexer -l indexer.log index -d <~/documents> -o <output_file>
+indexer -l indexer.log index -p <~/documents> -o <output_file>
 ```
 
 - ### Querying
@@ -75,8 +75,13 @@ indexer --version
 
 ### TODO
 
-The files index is stored in memory while indexing is in progress,
-which becomes a bottleneck when the file count gets past 50000.
+Additional optimizations.
+
+Memory-mapped files: For very large datasets, consider using memory-mapped files (mmap) for faster I/O.
+Streaming parser: Implement streaming parsers for large documents to avoid loading entire files into memory.
+Compression: Use fast compression algorithms like LZ4 or Zstd for the index to reduce I/O overhead.
+Incremental updates: Implement a more efficient incremental update mechanism instead of full re-indexing.
+Async I/O: Consider using async I/O with Tokio for file operations to avoid blocking threads.
 
 ## Licensing
 

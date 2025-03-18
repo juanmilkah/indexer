@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 use std::char;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -8,7 +11,10 @@ use std::time::SystemTime;
 
 use anyhow::Context;
 use clap::Parser;
+use parsers::*;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::slice::ParallelSlice;
+use rustc_hash::FxHashMap;
 
 use self::server::run_server;
 
@@ -43,12 +49,8 @@ struct Args {
 enum Commands {
     /// Build an index for a directory
     Index {
-        #[arg(
-            short = 'd',
-            long = "directory",
-            help = "Directory to perfom action on"
-        )]
-        directory: PathBuf,
+        #[arg(short = 'p', long = "path", help = "Path to perfom action on")]
+        path: PathBuf,
         #[arg(short = 'o', long = "output", help = "Path to index file")]
         output_file: PathBuf,
     },
@@ -191,81 +193,33 @@ fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Opti
     None
 }
 
-fn parse_doc_by_extension(
-    doc: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
-) -> anyhow::Result<Option<Vec<String>>> {
-    let doc_extension = doc.extension();
-    match doc_extension {
-        Some(ext) => match ext.to_str().unwrap() {
-            "pdf" => match parsers::parse_pdf_document(doc, Arc::clone(&err_handler)) {
-                Ok(tokens) => Ok(Some(tokens)),
-                Err(err) => {
-                    err_handler
-                        .lock()
-                        .unwrap()
-                        .print(&format!("Skipped document: {:?}", doc));
-                    Err(err.into())
-                }
-            },
-            "xml" | "xhtml" => match parsers::parse_xml_document(doc, Arc::clone(&err_handler)) {
-                Ok(tokens) => Ok(Some(tokens)),
-                Err(err) => {
-                    err_handler
-                        .lock()
-                        .unwrap()
-                        .print(&format!("Skipped document: {:?}", doc));
-                    Err(err.into())
-                }
-            },
-            "html" => match parsers::parse_html_document(doc, Arc::clone(&err_handler)) {
-                Ok(tokens) => Ok(Some(tokens)),
-                Err(err) => {
-                    err_handler
-                        .lock()
-                        .unwrap()
-                        .print(&format!("Skipped document: {:?}", doc));
-                    Err(err.into())
-                }
-            },
-
-            "txt" | "md" => match parsers::parse_txt_document(doc, Arc::clone(&err_handler)) {
-                Ok(tokens) => Ok(Some(tokens)),
-                Err(err) => {
-                    err_handler
-                        .lock()
-                        .unwrap()
-                        .print(&format!("Skipped document: {:?}", doc));
-                    Err(err.into())
-                }
-            },
-            _ => {
-                err_handler
-                    .lock()
-                    .unwrap()
-                    .print(&format!("Skipped document: {:?}", doc));
-                Ok(None)
-            }
-        },
-        None => {
-            err_handler
-                .lock()
-                .unwrap()
-                .print(&format!("Skipped document: {:?}", doc));
-            Ok(None)
-        }
-    }
-}
-
 fn index_documents(
-    files_dir: &Path,
+    filepath: &Path,
     index_path: &Path,
     error_handler: &mut ErrorHandler,
 ) -> anyhow::Result<()> {
     println!("Indexing documents...");
-    let files_dir = PathBuf::from(files_dir);
-    let docs = read_files_recursively(&files_dir)?;
+    let filepath = PathBuf::from(filepath);
+    let docs = if filepath.is_dir() {
+        read_files_recursively(&filepath)?
+    } else {
+        Vec::from([filepath])
+    };
+
     let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());
+
+    let mut extensions_map: FxHashMap<
+        String,
+        fn(&Path, Arc<Mutex<&mut ErrorHandler>>) -> anyhow::Result<Vec<String>>,
+    > = FxHashMap::default();
+
+    extensions_map.insert("csv".to_string(), parse_csv_document);
+    extensions_map.insert("html".to_string(), parse_html_document);
+    extensions_map.insert("pdf".to_string(), parse_pdf_document);
+    extensions_map.insert("xml".to_string(), parse_xml_document);
+    extensions_map.insert("xhtml".to_string(), parse_xml_document);
+    extensions_map.insert("text".to_string(), parse_txt_document);
+    extensions_map.insert("md".to_string(), parse_txt_document);
 
     // process the documents in parallel
     let model = Arc::new(Mutex::new(models::Model::new(index_table)));
@@ -273,44 +227,51 @@ fn index_documents(
     let indexed_files = AtomicU64::new(0);
     let err_handler = Arc::new(Mutex::new(error_handler));
 
-    docs.par_iter().for_each(|doc| {
-        // check if document index exists in the index_table;
-        // if it exixts, check whether the file has been modified
-        // since the last index
-        // if yes then reindex the file
-        // if no then skip the file
-        if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
-            if !is_expired {
-                let err_handler = Arc::clone(&err_handler);
-                err_handler
-                    .lock()
-                    .unwrap()
-                    .print(&format!("Skipped document: {:?}", doc));
-                return;
+    let chunk_size = 100;
+    docs.par_chunks(chunk_size).for_each(|chunk| {
+        chunk.par_iter().for_each(|doc| {
+            // check if document index exists in the index_table;
+            // if it exixts, check whether the file has been modified
+            // since the last index
+            // if yes then reindex the file
+            // if no then skip the file
+            if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table)
+            {
+                if !is_expired {
+                    skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let mut err_handler = err_handler.lock().unwrap();
+                    err_handler.print(&format!("Skipped document: {:?}", doc));
+                    return;
+                }
             }
-        }
 
-        //match the document's file extension and index it accordingly
-        match parse_doc_by_extension(doc, Arc::clone(&err_handler)) {
-            Ok(Some(tokens)) => {
-                indexed_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut model = model.lock().unwrap();
-                model.add_document(doc, &tokens)
+            if let Some(ext) = doc.extension() {
+                let ext = ext.to_string_lossy().to_string();
+                if let Some(parser) = extensions_map.get(&ext) {
+                    match parser(doc, Arc::clone(&err_handler)) {
+                        Ok(tokens) => {
+                            let mut model = model.lock().unwrap();
+                            model.add_document(doc, &tokens);
+                            indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
+                        }
+                        Err(err) => {
+                            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let mut err_handler = err_handler.lock().unwrap();
+                            err_handler
+                                .print(&format!("Failed to parse document: {:?}: {err}", doc));
+                            return;
+                        }
+                    }
+                }
             }
-            Ok(None) => {
-                skipped_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            Err(e) => {
-                skipped_files.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let err_handler = Arc::clone(&err_handler);
-                err_handler
-                    .lock()
-                    .unwrap()
-                    .print(&format!("Failed to parse document: {:?}: {e}", doc));
-            }
-        }
+
+            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut err_handler = err_handler.lock().unwrap();
+            err_handler.print(&format!("Failed to parse document: {:?}", doc));
+        });
     });
-    //
+
     // update the models idf
     model.lock().unwrap().update_idf();
 
@@ -343,11 +304,8 @@ fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Commands::Index {
-            directory,
-            output_file,
-        } => {
-            index_documents(&directory, &output_file, &mut error_handler)?;
+        Commands::Index { path, output_file } => {
+            index_documents(&path, &output_file, &mut error_handler)?;
         }
         Commands::Search {
             index_file,

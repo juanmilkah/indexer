@@ -1,3 +1,4 @@
+use anyhow::Context;
 use poppler::PopplerDocument;
 use scraper::{Html, Selector};
 use xml::reader::XmlEvent;
@@ -7,7 +8,7 @@ use crate::lexer::Lexer;
 use crate::ErrorHandler;
 
 use std::fs::{self, File};
-use std::io::{self, BufReader};
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -25,10 +26,43 @@ pub fn remove_stop_words(tokens: &[String]) -> Vec<String> {
     cleaned
 }
 
+pub fn parse_csv_document(
+    filepath: &Path,
+    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+) -> anyhow::Result<Vec<String>> {
+    {
+        err_handler
+            .lock()
+            .unwrap()
+            .print(&format!("Indexing document: {:?}", filepath));
+    }
+    let reader = BufReader::new(File::open(filepath).context("open filepath")?);
+    let mut rdr = csv::Reader::from_reader(reader);
+
+    let mut fields = String::new();
+
+    for record in rdr.records() {
+        // The iterator yieds Result<StringRecord, Error>
+        let record = record.context("check record")?;
+        for field in record.iter() {
+            fields.push_str(field);
+        }
+    }
+
+    let fields_chars = fields.to_lowercase().chars().collect::<Vec<char>>();
+    let mut lex = Lexer::new(&fields_chars);
+    let mut tokens = Vec::new();
+
+    while let Some(t) = lex.by_ref().next() {
+        tokens.push(t);
+    }
+    Ok(remove_stop_words(&tokens))
+}
+
 pub fn parse_html_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
-) -> io::Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     {
         err_handler
             .lock()
@@ -59,7 +93,7 @@ pub fn parse_html_document(
 pub fn parse_xml_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
-) -> io::Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     {
         err_handler
             .lock()
@@ -97,7 +131,7 @@ pub fn parse_xml_document(
 pub fn parse_pdf_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
-) -> io::Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     {
         err_handler
             .lock()
@@ -113,16 +147,16 @@ pub fn parse_pdf_document(
                     .unwrap()
                     .print(&format!("Failed to load document: {err}"));
             }
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{err:?}"),
-            ));
+            return Err(anyhow::Error::new(err));
         }
     };
 
     let end = document.get_n_pages();
     let mut tokens = Vec::new();
 
+    // I tried processing the doc in parallel
+    // Apparently the `poppler` crate does not impl `Send`
+    // I guess you'll just have to suck it up for huge pdfs
     for i in 1..end {
         if let Some(page) = document.get_page(i) {
             if let Some(text) = page.get_text() {
@@ -141,7 +175,7 @@ pub fn parse_pdf_document(
 pub fn parse_txt_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
-) -> io::Result<Vec<String>> {
+) -> anyhow::Result<Vec<String>> {
     err_handler
         .lock()
         .unwrap()
@@ -155,7 +189,7 @@ pub fn parse_txt_document(
                     .unwrap()
                     .print(&format!("Failed to read file {:?} : {err}", filepath));
             }
-            return Err(err);
+            return Err(anyhow::Error::new(err));
         }
     };
 
