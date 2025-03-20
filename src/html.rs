@@ -40,7 +40,6 @@ pub const HTML_DEFAULT: &str = r"
           })
           .catch((err) => console.error(err));
 
-        console.log(e.currentTarget.value);
       });
     </script>
   </body>

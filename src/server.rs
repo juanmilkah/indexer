@@ -46,7 +46,7 @@ pub fn run_server(index_file: &Path, port: u16, err_handler: &mut ErrorHandler) 
                     let mut body = String::new();
                     let _ = &request.as_reader().read_to_string(&mut body);
 
-                    match search_term(&body, index_file, None) {
+                    match search_term(&body, index_file) {
                         Ok(vals) => {
                             if !vals.is_empty() {
                                 let vals: Vec<u8> = vals

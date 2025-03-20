@@ -114,11 +114,7 @@ impl ErrorHandler {
     }
 }
 
-fn search_term(
-    term: &str,
-    index_file: &Path,
-    output_file: Option<PathBuf>,
-) -> anyhow::Result<Vec<PathBuf>> {
+fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let file = BufReader::new(File::open(index_file)?);
     let index_table: models::IndexTable =
         bincode::deserialize_from(file).context("deserialising model from file")?;
@@ -134,24 +130,7 @@ fn search_term(
 
     let tokens = parsers::remove_stop_words(&tokens);
     let model = models::Model::new(index_table);
-    let result = model.search_terms(&tokens);
-
-    if result.is_empty() {
-        println!("No results!");
-    }
-
-    if let Some(ref f) = output_file {
-        let result = result
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<String>>()
-            .join("\n");
-        fs::write(f, result)?;
-    } else {
-        result.iter().for_each(|r| println!("{:?}", r));
-    }
-
-    Ok(result)
+    Ok(model.search_terms(&tokens))
 }
 
 fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -206,7 +185,7 @@ fn index_documents(
         Vec::from([filepath])
     };
 
-    let index_table = get_index_table(index_path).unwrap_or_else(|_| models::IndexTable::new());
+    let index_table = get_index_table(index_path).unwrap_or_default();
 
     let mut extensions_map: FxHashMap<
         String,
@@ -312,7 +291,25 @@ fn main() -> anyhow::Result<()> {
             query,
             output_file,
         } => {
-            search_term(&query, &index_file, output_file)?;
+            let result = search_term(&query, &index_file)?;
+
+            // i'm not really sure what i should do if
+            // I get zero matches
+            if result.is_empty() {
+                error_handler.print(&format!("No Zero Matches!"));
+                return Ok(());
+            }
+
+            if let Some(ref f) = output_file {
+                let result = result
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                fs::write(f, result)?;
+            } else {
+                result.iter().for_each(|r| println!("{:?}", r));
+            }
         }
         Commands::Serve { index_file, port } => {
             let port = port.unwrap_or(8765);

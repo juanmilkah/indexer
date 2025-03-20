@@ -5,7 +5,7 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug)]
 /// A Representation of all the indexed documents
 pub struct IndexTable {
     /// The number of documents in the index Table
@@ -14,7 +14,7 @@ pub struct IndexTable {
     pub tables: FxHashMap<PathBuf, DocTable>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 /// Individual document index
 pub struct DocTable {
     /// Time the document was last indexed
@@ -27,17 +27,8 @@ pub struct DocTable {
 
 pub type DocIndex = FxHashMap<String, f32>;
 
-impl IndexTable {
-    pub fn new() -> Self {
-        Self {
-            docs_count: 0,
-            tables: FxHashMap::default(),
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize)]
-/// The Document Model containing the index table for all the documents and their metadata
+/// Document Model, documents => metadata
 pub struct Model {
     pub index_table: IndexTable,
 }
@@ -60,7 +51,7 @@ impl Model {
 
         // convert counts to Tf
         for count in doc_index.values_mut() {
-            *count = (*count / word_count as f32) + 1.0_f32;
+            *count = *count / word_count as f32;
         }
 
         if !doc_index.is_empty() {
@@ -91,8 +82,11 @@ impl Model {
             .par_iter_mut()
             .for_each(|(_, doc_table)| {
                 for (term, tf) in doc_table.doc_index.iter_mut() {
-                    let doc_freq = *term_doc_freq.get(term).unwrap_or(&0.0) as f32;
-                    let idf: f32 = (docs_count / doc_freq).ln().abs();
+                    let doc_freq = *term_doc_freq.get(term).unwrap_or(&1.0) as f32;
+                    //if the doc_count is 0, add 1_f32 to offset the idf value,
+                    // otherwise the idf may be 0 which then makes the tf 0
+                    // you get the idea
+                    let idf: f32 = (docs_count / doc_freq).ln().abs() + 1_f32;
                     *tf *= idf;
                 }
             });
