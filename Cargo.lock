@@ -658,6 +658,7 @@ dependencies = [
  "rustc-hash",
  "scraper",
  "serde",
+ "serde_json",
  "stop-words",
  "tiny_http",
  "xml",

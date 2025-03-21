@@ -34,7 +34,7 @@ bash build.sh
   (pdf, txt, md, xml, xhtml, html, csv)
 
 ```bash
-indexer index -p <path_to_document> -o <path_to_output_file>
+indexer index -p <path_to_document> -o <path_to_output_file> [dump_as_json]
 ```
 
 You can also redirect Stderr to a file via the `log` argument.

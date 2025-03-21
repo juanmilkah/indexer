@@ -3,7 +3,7 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use std::char;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -49,10 +49,16 @@ struct Args {
 enum Commands {
     /// Build an index for a directory
     Index {
-        #[arg(short = 'p', long = "path", help = "Path to perfom action on")]
+        #[clap(short = 'p', long = "path", help = "Path to perfom action on")]
         path: PathBuf,
-        #[arg(short = 'o', long = "output", help = "Path to index file")]
+        #[clap(short = 'o', long = "output", help = "Path to index file")]
         output_file: PathBuf,
+        #[clap(
+            short = 'j',
+            long = "json",
+            help = "Dump the file index in json format"
+        )]
+        json: bool,
     },
     /// Query some search term using the index
     Search {
@@ -70,6 +76,11 @@ enum Commands {
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u16>,
     },
+}
+
+enum DumpFormat {
+    Json,
+    Bytes,
 }
 
 pub struct ErrorHandler {
@@ -115,10 +126,6 @@ impl ErrorHandler {
 }
 
 fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let file = BufReader::new(File::open(index_file)?);
-    let index_table: models::IndexTable =
-        bincode::deserialize_from(file).context("deserialising model from file")?;
-
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = lexer::Lexer::new(&text_chars);
 
@@ -129,6 +136,7 @@ fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
     }
 
     let tokens = parsers::remove_stop_words(&tokens);
+    let index_table = get_index_table(index_file).context("get index table")?;
     let model = models::Model::new(index_table);
     Ok(model.search_terms(&tokens))
 }
@@ -154,9 +162,25 @@ fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn get_index_table(filepath: &Path) -> anyhow::Result<models::IndexTable> {
-    let index_file = File::open(filepath)?;
-    let index_table: models::IndexTable =
-        bincode::deserialize_from(&index_file).context("deserializing model from file")?;
+    let mut index_file = BufReader::new(File::open(filepath).context("open index file")?);
+    let mut buf = Vec::new();
+    index_file
+        .read_to_end(&mut buf)
+        .context("read index file")?;
+
+    let dump_format = match buf[0] {
+        b'{' => DumpFormat::Json,
+        b'B' => DumpFormat::Bytes,
+        _ => DumpFormat::Bytes,
+    };
+
+    let index_table: models::IndexTable = match dump_format {
+        DumpFormat::Bytes => {
+            bincode::deserialize(&buf[1..]).context("deserializing model from bytes")?
+        }
+        DumpFormat::Json => serde_json::from_slice(&buf).context("deserialise model from json")?,
+    };
+
     Ok(index_table)
 }
 
@@ -175,6 +199,7 @@ fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Opti
 fn index_documents(
     filepath: &Path,
     index_path: &Path,
+    dump_format: DumpFormat,
     error_handler: &mut ErrorHandler,
 ) -> anyhow::Result<()> {
     println!("Indexing documents...");
@@ -259,9 +284,22 @@ fn index_documents(
         println!("Writing into {:?}...", index_path);
     }
     // write the documents index_table in the provided file path
-    let file = BufWriter::new(File::create(index_path)?);
-    bincode::serialize_into(file, &model.lock().unwrap().index_table)
-        .context("serializing model")?;
+    let mut file = BufWriter::new(File::create(index_path)?);
+
+    let mut buf = Vec::new();
+    match dump_format {
+        DumpFormat::Bytes => buf.push(b'B'),
+        DumpFormat::Json => (),
+    }
+    let mut serialised_data = match dump_format {
+        DumpFormat::Json => serde_json::to_vec(&model.lock().unwrap().index_table)
+            .context("serialise model into json")?,
+        DumpFormat::Bytes => bincode::serialize(&model.lock().unwrap().index_table)
+            .context("serializing model into bytes")?,
+    };
+
+    buf.append(&mut serialised_data);
+    file.write_all(&buf).context("write bytes to file")?;
 
     println!(
         "Indexed {} files",
@@ -283,8 +321,18 @@ fn main() -> anyhow::Result<()> {
     };
 
     match args.command {
-        Commands::Index { path, output_file } => {
-            index_documents(&path, &output_file, &mut error_handler)?;
+        Commands::Index {
+            path,
+            output_file,
+            json,
+        } => {
+            let dump_format = if json {
+                DumpFormat::Json
+            } else {
+                DumpFormat::Bytes
+            };
+
+            index_documents(&path, &output_file, dump_format, &mut error_handler)?;
         }
         Commands::Search {
             index_file,
