@@ -170,13 +170,12 @@ fn get_index_table(filepath: &Path) -> anyhow::Result<models::IndexTable> {
 
     let dump_format = match buf[0] {
         b'{' => DumpFormat::Json,
-        b'B' => DumpFormat::Bytes,
         _ => DumpFormat::Bytes,
     };
 
     let index_table: models::IndexTable = match dump_format {
         DumpFormat::Bytes => {
-            bincode::deserialize(&buf[1..]).context("deserializing model from bytes")?
+            bincode2::deserialize(&buf).context("deserializing model from bytes")?
         }
         DumpFormat::Json => serde_json::from_slice(&buf).context("deserialise model from json")?,
     };
@@ -284,22 +283,14 @@ fn index_documents(
         println!("Writing into {:?}...", index_path);
     }
     // write the documents index_table in the provided file path
-    let mut file = BufWriter::new(File::create(index_path)?);
+    let file = BufWriter::new(File::create(index_path)?);
 
-    let mut buf = Vec::new();
     match dump_format {
-        DumpFormat::Bytes => buf.push(b'B'),
-        DumpFormat::Json => (),
-    }
-    let mut serialised_data = match dump_format {
-        DumpFormat::Json => serde_json::to_vec(&model.lock().unwrap().index_table)
+        DumpFormat::Json => serde_json::to_writer(file, &model.lock().unwrap().index_table)
             .context("serialise model into json")?,
-        DumpFormat::Bytes => bincode::serialize(&model.lock().unwrap().index_table)
+        DumpFormat::Bytes => bincode2::serialize_into(file, &model.lock().unwrap().index_table)
             .context("serializing model into bytes")?,
     };
-
-    buf.append(&mut serialised_data);
-    file.write_all(&buf).context("write bytes to file")?;
 
     println!(
         "Indexed {} files",
