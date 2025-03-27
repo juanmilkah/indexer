@@ -25,7 +25,7 @@ pub struct DocTable {
     pub doc_index: DocIndex,
 }
 
-pub type DocIndex = FxHashMap<String, f32>;
+pub type DocIndex = FxHashMap<String, f64>;
 
 #[derive(Serialize, Deserialize)]
 /// Document Model, documents => metadata
@@ -40,7 +40,7 @@ impl Model {
 
     pub fn add_document(&mut self, doc: &Path, tokens: &[String]) {
         let mut doc_index = DocIndex::default();
-        let word_count = tokens.len() as f64;
+        let word_count = tokens.len();
 
         //calculate term frequencies
         for token in tokens {
@@ -51,7 +51,7 @@ impl Model {
 
         // convert counts to Tf
         for count in doc_index.values_mut() {
-            *count = *count / word_count as f32;
+            *count = *count / word_count as f64;
         }
 
         if !doc_index.is_empty() {
@@ -66,7 +66,7 @@ impl Model {
     }
 
     pub fn update_idf(&mut self) {
-        let docs_count = self.index_table.docs_count as f32;
+        let docs_count = self.index_table.docs_count as f64;
         let mut term_doc_freq = FxHashMap::default();
 
         //calculate the document freq for each term
@@ -82,11 +82,11 @@ impl Model {
             .par_iter_mut()
             .for_each(|(_, doc_table)| {
                 for (term, tf) in doc_table.doc_index.iter_mut() {
-                    let doc_freq = *term_doc_freq.get(term).unwrap_or(&1.0) as f32;
-                    //if the doc_count is 0, add 1_f32 to offset the idf value,
+                    let doc_freq = *term_doc_freq.get(term).unwrap_or(&1.0) as f64;
+                    //if the doc_count is 0, add 1_f64 to offset the idf value,
                     // otherwise the idf may be 0 which then makes the tf 0
                     // you get the idea
-                    let idf: f32 = (docs_count / doc_freq).ln().abs() + 1_f32;
+                    let idf: f64 = (docs_count / doc_freq).ln().abs() + 1_f64;
                     *tf *= idf;
                 }
             });
