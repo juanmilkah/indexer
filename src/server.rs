@@ -27,8 +27,6 @@ pub fn run_server(index_file: &Path, port: u16, err_handler: &mut ErrorHandler) 
         match &request.method() {
             Method::Get => match request.url() {
                 "/" => {
-                    // respond with the index.html file from the .indexer directory
-                    // or the current directory in the case of development
                     let header = Header::from_bytes("Content-Type", "text/html").unwrap();
                     let response = Response::from_string(HTML_DEFAULT).with_header(header);
                     let _ = request.respond(response);
