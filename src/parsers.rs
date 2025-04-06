@@ -71,7 +71,9 @@ pub fn parse_html_document(
     }
     let content = fs::read_to_string(filepath)?;
     let document = Html::parse_document(&content);
-    let selector = Selector::parse("body").unwrap();
+    let selector = Selector::parse("body")
+        .map_err(|err| eprintln!("ERROR parsing html body: {}", err))
+        .unwrap();
 
     let body = document.select(&selector).next().unwrap();
 
