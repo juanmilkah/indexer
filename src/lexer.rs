@@ -57,6 +57,24 @@ impl<'a> Lexer<'a> {
         let stemmer = Stemmer::create(Algorithm::English);
         stemmer.stem(token).to_string()
     }
+
+    pub fn get_tokens(&mut self, stop_words: &[String]) -> Vec<String> {
+        let mut tokens = Vec::new();
+        while let Some(token) = self.next() {
+            tokens.push(token);
+        }
+
+        self.remove_stop_words(&mut tokens, stop_words);
+        tokens
+    }
+
+    fn remove_stop_words(&self, tokens: &mut Vec<String>, stop_words: &[String]) {
+        for i in 0..tokens.len() {
+            if stop_words.contains(&tokens[i]) {
+                tokens.remove(i);
+            }
+        }
+    }
 }
 
 impl Iterator for Lexer<'_> {

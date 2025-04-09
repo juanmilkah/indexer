@@ -9,6 +9,7 @@ use parsers::*;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 use rustc_hash::FxHashMap;
+use stop_words::LANGUAGE;
 
 use std::{
     fs::{self, File},
@@ -68,14 +69,8 @@ impl ErrorHandler {
 pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = lexer::Lexer::new(&text_chars);
-
-    let mut tokens = Vec::new();
-
-    while let Some(token) = lex.by_ref().next() {
-        tokens.push(token);
-    }
-
-    let tokens = parsers::remove_stop_words(&tokens);
+    let stop_words = stop_words::get(LANGUAGE::English);
+    let tokens = lex.get_tokens(&stop_words);
     let index_table = get_index_table(index_file).context("get index table")?;
     let model = models::Model::new(index_table);
     Ok(model.search_terms(&tokens))
@@ -99,7 +94,7 @@ pub fn index_documents(
 
     let mut extensions_map: FxHashMap<
         String,
-        fn(&Path, Arc<Mutex<&mut ErrorHandler>>) -> anyhow::Result<Vec<String>>,
+        fn(&Path, Arc<Mutex<&mut ErrorHandler>>, &[String]) -> anyhow::Result<Vec<String>>,
     > = FxHashMap::default();
 
     extensions_map.insert("csv".to_string(), parse_csv_document);
@@ -115,6 +110,7 @@ pub fn index_documents(
     let skipped_files = AtomicU64::new(0);
     let indexed_files = AtomicU64::new(0);
     let err_handler = Arc::new(Mutex::new(error_handler));
+    let stop_words = stop_words::get(LANGUAGE::English);
 
     let chunk_size = 100;
     docs.par_chunks(chunk_size).for_each(|chunk| {
@@ -137,7 +133,7 @@ pub fn index_documents(
             if let Some(ext) = doc.extension() {
                 let ext = ext.to_string_lossy().to_string();
                 if let Some(parser) = extensions_map.get(&ext) {
-                    match parser(doc, Arc::clone(&err_handler)) {
+                    match parser(doc, Arc::clone(&err_handler), &stop_words) {
                         Ok(tokens) => {
                             let mut model = model.lock().unwrap();
                             model.add_document(doc, &tokens);
@@ -147,8 +143,7 @@ pub fn index_documents(
                         Err(err) => {
                             skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let mut err_handler = err_handler.lock().unwrap();
-                            err_handler
-                                .print(&format!("Failed to parse document: {:?}: {err}", doc));
+                            err_handler.print(&format!("Skippped document: {:?}: {err}", doc));
                             return;
                         }
                     }

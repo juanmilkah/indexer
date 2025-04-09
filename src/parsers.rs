@@ -12,23 +12,10 @@ use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub fn remove_stop_words(tokens: &[String]) -> Vec<String> {
-    let words = stop_words::get(stop_words::LANGUAGE::English);
-    let mut cleaned = Vec::new();
-
-    for token in tokens {
-        if words.contains(token) {
-            continue;
-        }
-        cleaned.push(token.to_string());
-    }
-
-    cleaned
-}
-
 pub fn parse_csv_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         err_handler
@@ -51,17 +38,14 @@ pub fn parse_csv_document(
 
     let fields_chars = fields.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&fields_chars);
-    let mut tokens = Vec::new();
-
-    while let Some(t) = lex.by_ref().next() {
-        tokens.push(t);
-    }
-    Ok(remove_stop_words(&tokens))
+    let tokens = lex.get_tokens(stop_words);
+    Ok(tokens)
 }
 
 pub fn parse_html_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         err_handler
@@ -84,17 +68,14 @@ pub fn parse_html_document(
     }
     let text_chars = text.trim().to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&text_chars);
-    let mut tokens = Vec::new();
-
-    while let Some(token) = lex.by_ref().next() {
-        tokens.push(token);
-    }
-    Ok(remove_stop_words(&tokens))
+    let tokens = lex.get_tokens(stop_words);
+    Ok(tokens)
 }
 
 pub fn parse_xml_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         err_handler
@@ -114,10 +95,7 @@ pub fn parse_xml_document(
             Ok(XmlEvent::Characters(text)) => {
                 let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
                 let mut lex = Lexer::new(&text_chars);
-
-                while let Some(token) = lex.by_ref().next() {
-                    tokens.push(token);
-                }
+                tokens.append(&mut lex.get_tokens(stop_words));
             }
             Err(err) => {
                 err_handler.lock().unwrap().print(&format!("{err}"));
@@ -126,13 +104,13 @@ pub fn parse_xml_document(
             _ => {}
         }
     }
-
-    Ok(remove_stop_words(&tokens))
+    Ok(tokens)
 }
 
 pub fn parse_pdf_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         err_handler
@@ -164,19 +142,18 @@ pub fn parse_pdf_document(
             if let Some(text) = page.get_text() {
                 let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
                 let mut lex = Lexer::new(&text_chars);
-                while let Some(token) = lex.by_ref().next() {
-                    tokens.push(token);
-                }
+                tokens.append(&mut lex.get_tokens(stop_words));
             }
         }
     }
 
-    Ok(remove_stop_words(&tokens))
+    Ok(tokens)
 }
 
 pub fn parse_txt_document(
     filepath: &Path,
     err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     err_handler
         .lock()
@@ -197,10 +174,6 @@ pub fn parse_txt_document(
 
     let content = content.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&content);
-    let mut tokens = Vec::new();
-    while let Some(token) = lex.by_ref().next() {
-        tokens.push(token);
-    }
-
-    Ok(remove_stop_words(&tokens))
+    let tokens = lex.get_tokens(stop_words);
+    Ok(tokens)
 }
