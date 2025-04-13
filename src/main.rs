@@ -1,9 +1,11 @@
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-use indexer::{index_documents, search_term, DumpFormat, ErrorHandler, ErrorStream};
+use anyhow::Context;
+use indexer::{index_documents, search_term, Config, DumpFormat, ErrorHandler, ErrorStream};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
@@ -35,9 +37,9 @@ enum Commands {
     /// Build an index for a directory
     Index {
         #[clap(short = 'p', long = "path", help = "Path to perfom action on")]
-        path: PathBuf,
+        path: Option<PathBuf>,
         #[clap(short = 'o', long = "output", help = "Path to index file")]
-        output_file: PathBuf,
+        output_file: Option<PathBuf>,
         #[clap(
             short = 'j',
             long = "json",
@@ -70,10 +72,15 @@ fn main() -> anyhow::Result<()> {
         None => ErrorHandler::new(ErrorStream::Stderr),
     };
 
+    let mut indexfile = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
+    indexfile.push(".indexer");
+    indexfile.push("indexfile");
+
     match args.command {
         Commands::Index {
             path,
             output_file,
+
             json,
         } => {
             let dump_format = if json {
@@ -82,7 +89,26 @@ fn main() -> anyhow::Result<()> {
                 DumpFormat::Bytes
             };
 
-            index_documents(&path, &output_file, dump_format, &mut error_handler)?;
+            let filepath = match path {
+                Some(p) => p,
+                None => {
+                    let current_dir = std::env::current_dir().context("get current directory")?;
+                    current_dir
+                }
+            };
+
+            let index_path = match output_file {
+                Some(p) => p,
+                None => indexfile,
+            };
+            let error_handler = Arc::new(Mutex::new(error_handler));
+            let cfg = Config {
+                filepath,
+                index_path,
+                error_handler,
+                dump_format,
+            };
+            index_documents(&cfg)?;
         }
         Commands::Search {
             index_file,
@@ -111,8 +137,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Serve { index_file, port } => {
             let port = port.unwrap_or(8765);
+            let error_handler = Arc::new(Mutex::new(error_handler));
 
-            run_server(&index_file, port, &mut error_handler)?;
+            run_server(&index_file, port, error_handler)?;
         }
     }
     Ok(())

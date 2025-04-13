@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 pub fn parse_csv_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -44,7 +44,7 @@ pub fn parse_csv_document(
 
 pub fn parse_html_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -59,7 +59,10 @@ pub fn parse_html_document(
         .map_err(|err| eprintln!("ERROR parsing html body: {}", err))
         .unwrap();
 
-    let body = document.select(&selector).next().unwrap();
+    let body = document
+        .select(&selector)
+        .next()
+        .context("select html body selctor")?;
 
     let mut text = String::new();
     for node in body.text() {
@@ -74,7 +77,7 @@ pub fn parse_html_document(
 
 pub fn parse_xml_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -109,7 +112,7 @@ pub fn parse_xml_document(
 
 pub fn parse_pdf_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -152,7 +155,7 @@ pub fn parse_pdf_document(
 
 pub fn parse_txt_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     err_handler
