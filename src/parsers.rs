@@ -1,6 +1,8 @@
 use anyhow::Context;
+use html5ever::driver::{self, ParseOpts};
 use poppler::PopplerDocument;
-use scraper::{Html, Selector};
+use scraper::{Html, HtmlTreeSink};
+use tendril::TendrilSink;
 use xml::reader::XmlEvent;
 use xml::EventReader;
 
@@ -53,19 +55,15 @@ pub fn parse_html_document(
             .unwrap()
             .print(&format!("Indexing document: {:?}", filepath));
     }
-    let content = fs::read_to_string(filepath)?;
-    let document = Html::parse_document(&content);
-    let selector = Selector::parse("body")
-        .map_err(|err| eprintln!("ERROR parsing html body: {}", err))
-        .unwrap();
-
-    let body = document
-        .select(&selector)
-        .next()
-        .context("select html body selctor")?;
-
+    let document = fs::read_to_string(filepath)?;
+    let parser = driver::parse_document(
+        HtmlTreeSink::new(Html::new_document()),
+        ParseOpts::default(),
+    );
+    let html = parser.one(document);
+    let root = html.root_element().text();
     let mut text = String::new();
-    for node in body.text() {
+    for node in root {
         text.push_str(node);
         text.push(' ');
     }

@@ -504,12 +504,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyperparse"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4e54e496ef4f1c713be2fe026511c919487339a76807e5bf97a675341527419"
-
-[[package]]
 name = "icu_collections"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,7 +652,6 @@ dependencies = [
  "csv",
  "home",
  "html5ever",
- "hyperparse",
  "jemallocator",
  "poppler",
  "rayon",
@@ -668,6 +661,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stop-words",
+ "tendril",
  "tiny_http",
  "xml",
 ]
