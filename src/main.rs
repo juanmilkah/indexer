@@ -50,16 +50,18 @@ enum Commands {
     /// Query some search term using the index
     Search {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: PathBuf,
+        index_file: Option<PathBuf>,
         #[arg(short = 'q', long = "query", help = "Query to search")]
         query: String,
         #[arg(short = 'o', long = "output", help = "Write result to file")]
         output_file: Option<PathBuf>,
+        #[arg(short = 'c', long = "count", help = "Number of results")]
+        result_count: Option<usize>,
     },
     /// Serve the search engine via http
     Serve {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: PathBuf,
+        index_file: Option<PathBuf>,
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u16>,
     },
@@ -67,13 +69,19 @@ enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let mut error_handler = match args.log_file {
+    let mut home_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
+    home_dir.push(".indexer");
+    let error_handler = match args.log_file {
         Some(file) => ErrorHandler::new(ErrorStream::File(file)),
-        None => ErrorHandler::new(ErrorStream::Stderr),
+        None => {
+            let mut log_file = home_dir.clone();
+            log_file.push("logs");
+            ErrorHandler::new(ErrorStream::File(log_file))
+        }
     };
+    let error_handler = Arc::new(Mutex::new(error_handler));
 
-    let mut indexfile = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
-    indexfile.push(".indexer");
+    let mut indexfile = home_dir;
     indexfile.push("indexfile");
 
     match args.command {
@@ -101,7 +109,6 @@ fn main() -> anyhow::Result<()> {
                 Some(p) => p,
                 None => indexfile,
             };
-            let error_handler = Arc::new(Mutex::new(error_handler));
             let cfg = Config {
                 filepath,
                 index_path,
@@ -114,13 +121,21 @@ fn main() -> anyhow::Result<()> {
             index_file,
             query,
             output_file,
+            result_count,
         } => {
-            let result = search_term(&query, &index_file)?;
+            let index_file = match index_file {
+                Some(p) => p,
+                None => indexfile,
+            };
+            let mut result = search_term(&query, &index_file)?;
 
             // i'm not really sure what i should do if
             // I get zero matches
             if result.is_empty() {
-                error_handler.print(&format!("No Zero Matches!"));
+                error_handler
+                    .lock()
+                    .unwrap()
+                    .print(&format!("No Zero Matches!"));
                 return Ok(());
             }
 
@@ -132,12 +147,23 @@ fn main() -> anyhow::Result<()> {
                     .join("\n");
                 fs::write(f, result)?;
             } else {
-                result.iter().for_each(|r| println!("{:?}", r));
+                let mut err_handler = error_handler.lock().unwrap();
+                if let Some(count) = result_count {
+                    if result.len() > count {
+                        result.truncate(count);
+                    }
+                }
+                result
+                    .iter()
+                    .for_each(|r| err_handler.print(&format!("{:?}", r)));
             }
         }
         Commands::Serve { index_file, port } => {
             let port = port.unwrap_or(8765);
-            let error_handler = Arc::new(Mutex::new(error_handler));
+            let index_file = match index_file {
+                Some(p) => p,
+                None => indexfile,
+            };
 
             run_server(&index_file, port, error_handler)?;
         }

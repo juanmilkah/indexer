@@ -28,25 +28,28 @@ bash build.sh
 
 ## Usage
 
+The program uses `$HOME/.indexer/indexfile` as the default path for the 
+index_file.  
+
 - ### Indexing
   If path to docs is not provided it falls back to the current directory.  
   Supported file types:  
   (pdf, txt, md, xml, xhtml, html, csv)
 
 ```bash
-indexer index -p <path_to_document> -o <path_to_output_file> [dump_as_json]
+indexer index -p [path_to_document] -o [path_to_output_file] [json_format]
 ```
 
 You can also redirect Stderr to a file via the `log` argument.
 
 ```bash
-indexer -l indexer.log index -p <~/documents> -o <output_file>
+indexer --log indexer.log index -p <~/documents> 
 ```
 
 - ### Querying
 
 ```bash
-indexer query -i <path_to_index_file> -q <query> -o [output_file]
+indexer query  -q <query> -i [path_to_index_file] -o [output_file] --count [10]
 ```
 
 - ### Serving via http server
@@ -54,7 +57,7 @@ indexer query -i <path_to_index_file> -q <query> -o [output_file]
   The average latency for a query is `45ms`
 
 ```bash
-indexer serve -i <path_to_index_file> -p [port]
+indexer serve -i [path_to_index_file] -p [port]
 ```
 
 ```bash
