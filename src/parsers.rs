@@ -1,6 +1,8 @@
 use anyhow::Context;
+use html5ever::driver::{self, ParseOpts};
 use poppler::PopplerDocument;
-use scraper::{Html, Selector};
+use scraper::{Html, HtmlTreeSink};
+use tendril::TendrilSink;
 use xml::reader::XmlEvent;
 use xml::EventReader;
 
@@ -14,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 pub fn parse_csv_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -44,7 +46,7 @@ pub fn parse_csv_document(
 
 pub fn parse_html_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -53,16 +55,15 @@ pub fn parse_html_document(
             .unwrap()
             .print(&format!("Indexing document: {:?}", filepath));
     }
-    let content = fs::read_to_string(filepath)?;
-    let document = Html::parse_document(&content);
-    let selector = Selector::parse("body")
-        .map_err(|err| eprintln!("ERROR parsing html body: {}", err))
-        .unwrap();
-
-    let body = document.select(&selector).next().unwrap();
-
+    let document = fs::read_to_string(filepath)?;
+    let parser = driver::parse_document(
+        HtmlTreeSink::new(Html::new_document()),
+        ParseOpts::default(),
+    );
+    let html = parser.one(document);
+    let root = html.root_element().text();
     let mut text = String::new();
-    for node in body.text() {
+    for node in root {
         text.push_str(node);
         text.push(' ');
     }
@@ -74,7 +75,7 @@ pub fn parse_html_document(
 
 pub fn parse_xml_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -109,7 +110,7 @@ pub fn parse_xml_document(
 
 pub fn parse_pdf_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
@@ -152,7 +153,7 @@ pub fn parse_pdf_document(
 
 pub fn parse_txt_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<&mut ErrorHandler>>,
+    err_handler: Arc<Mutex<ErrorHandler>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     err_handler

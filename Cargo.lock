@@ -661,6 +661,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stop-words",
+ "tendril",
  "tiny_http",
  "xml",
 ]

@@ -69,13 +69,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn remove_stop_words(&self, tokens: &mut Vec<String>, stop_words: &[String]) {
-        let mut new_tokens = Vec::new();
-        for i in 0..tokens.len() {
-            if !stop_words.contains(&tokens[i]) {
-                new_tokens.push(tokens[i].clone());
-            }
-        }
-        *tokens = new_tokens;
+        *tokens = tokens
+            .iter()
+            .filter(|t| !stop_words.contains(t))
+            .map(|t| t.to_string())
+            .collect::<Vec<String>>();
     }
 }
 

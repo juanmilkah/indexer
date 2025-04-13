@@ -2,23 +2,31 @@ use tiny_http::{Header, Method, Response, Server};
 
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::html::HTML_DEFAULT;
 use crate::{search_term, ErrorHandler};
 
-pub fn run_server(index_file: &Path, port: u16, err_handler: &mut ErrorHandler) -> io::Result<()> {
+pub fn run_server(
+    index_file: &Path,
+    port: u16,
+    err_handler: Arc<Mutex<ErrorHandler>>,
+) -> io::Result<()> {
     let port = format!("localhost:{port}");
     let server = match Server::http(&port) {
         Ok(val) => val,
         Err(err) => {
-            err_handler.print(&format!("Failed to bind server to port {port}: {err}"));
+            err_handler
+                .lock()
+                .unwrap()
+                .print(&format!("Failed to bind server to port {port}: {err}"));
             return Err(io::Error::new(io::ErrorKind::ConnectionRefused, err));
         }
     };
     println!("Server listening on port {port}");
 
     for mut request in server.incoming_requests() {
-        err_handler.print(&format!(
+        err_handler.lock().unwrap().print(&format!(
             "{method} {url}",
             method = request.method(),
             url = request.url()
