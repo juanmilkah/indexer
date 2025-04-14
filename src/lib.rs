@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::SystemTime,
 };
 
@@ -22,7 +22,8 @@ pub struct Config {
     pub filepath: PathBuf,
     pub index_path: PathBuf,
     pub dump_format: DumpFormat,
-    pub error_handler: Arc<Mutex<ErrorHandler>>,
+    pub error_handler: ErrorHandler,
+    pub sender: Arc<Mutex<mpsc::Sender<String>>>,
 }
 
 pub enum DumpFormat {
@@ -95,7 +96,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
 
     let mut extensions_map: FxHashMap<
         String,
-        fn(&Path, Arc<Mutex<ErrorHandler>>, &[String]) -> anyhow::Result<Vec<String>>,
+        fn(&Path, Arc<Mutex<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
     > = FxHashMap::default();
 
     extensions_map.insert("csv".to_string(), parse_csv_document);
@@ -111,6 +112,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     let skipped_files = AtomicU64::new(0);
     let indexed_files = AtomicU64::new(0);
     let stop_words = stop_words::get(LANGUAGE::English);
+    let err_sender = Arc::clone(&cfg.sender);
 
     // let chunk_size = 100;
     // docs.par_chunks(chunk_size).for_each(|chunk| {
@@ -123,8 +125,6 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
             if !is_expired {
                 skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let mut err_handler = cfg.error_handler.lock().unwrap();
-                err_handler.print(&format!("Skipped document: {:?}", doc));
                 return;
             }
         }
@@ -132,7 +132,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         if let Some(ext) = doc.extension() {
             let ext = ext.to_string_lossy().to_string();
             if let Some(parser) = extensions_map.get(&ext) {
-                match parser(doc, Arc::clone(&cfg.error_handler), &stop_words) {
+                match parser(doc, err_sender.clone(), &stop_words) {
                     Ok(tokens) => {
                         let mut model = model.lock().unwrap();
                         model.add_document(doc, &tokens);
@@ -141,8 +141,10 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                     }
                     Err(err) => {
                         skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let mut err_handler = cfg.error_handler.lock().unwrap();
-                        err_handler.print(&format!("Skippped document: {:?}: {err}", doc));
+                        let _ = Arc::clone(&cfg.sender)
+                            .lock()
+                            .unwrap()
+                            .send(format!("Skippped document: {:?}: {err}", doc));
                         return;
                     }
                 }
@@ -150,18 +152,30 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         }
 
         skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut err_handler = cfg.error_handler.lock().unwrap();
-        err_handler.print(&format!("Failed to parse document: {:?}", doc));
+        let _ = cfg
+            .sender
+            .lock()
+            .unwrap()
+            .send(format!("Failed to parse document: {:?}", doc));
     });
-    // });
 
+    println!("Completed Indexing documents...");
+    println!(
+        "Indexed {} files",
+        indexed_files.load(std::sync::atomic::Ordering::SeqCst)
+    );
+    println!(
+        "Skipped {} files",
+        skipped_files.load(std::sync::atomic::Ordering::SeqCst)
+    );
+
+    if indexed_files.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        return Ok(());
+    }
     // update the models idf
     model.lock().unwrap().update_idf();
 
-    {
-        println!("Completed Indexing!");
-        println!("Writing into {:?}...", cfg.index_path);
-    }
+    println!("Writing into {:?}...", cfg.index_path);
     // write the documents index_table in the provided file path
     let file = BufWriter::new(File::create(&cfg.index_path)?);
 
@@ -172,15 +186,36 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             .context("serializing model into bytes")?,
     };
 
-    println!(
-        "Indexed {} files",
-        indexed_files.load(std::sync::atomic::Ordering::SeqCst)
-    );
-    println!(
-        "Skipped {} files",
-        skipped_files.load(std::sync::atomic::Ordering::SeqCst)
-    );
+    Ok(())
+}
 
+pub fn handle_messages(receiver: &mpsc::Receiver<String>, filepath: &Path) -> anyhow::Result<()> {
+    let mut messages = Vec::with_capacity(100);
+    for _ in 0..100 {
+        match receiver.recv() {
+            Ok(message) => messages.push(message),
+            Err(_) => break,
+        }
+    }
+
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let mut messages = messages.join("\n");
+    messages.push_str("\n");
+
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&filepath)
+        .context("opening log file")?;
+
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(&messages.as_bytes())
+        .context("write buf to log file")?;
+
+    writer.flush().context("flush writer buffer")?;
     Ok(())
 }
 
