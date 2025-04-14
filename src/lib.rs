@@ -12,7 +12,7 @@ use stop_words::LANGUAGE;
 
 use std::{
     fs::{self, File},
-    io::{BufReader, BufWriter, Read, Write},
+    io::{stderr, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::SystemTime,
@@ -31,46 +31,10 @@ pub enum DumpFormat {
     Bytes,
 }
 
-pub struct ErrorHandler {
-    pub stream: ErrorStream,
-}
-
-pub enum ErrorStream {
-    File(PathBuf),
+#[derive(Clone)]
+pub enum ErrorHandler {
     Stderr,
-}
-
-impl ErrorHandler {
-    pub fn new(error_stream: ErrorStream) -> Self {
-        Self {
-            stream: error_stream,
-        }
-    }
-
-    pub fn print(&mut self, err: &str) {
-        match &self.stream {
-            ErrorStream::Stderr => {
-                eprintln!("{:?}", err);
-            }
-            ErrorStream::File(f) => {
-                let mut file = match fs::OpenOptions::new().create(true).append(true).open(f) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        return;
-                    }
-                };
-
-                match writeln!(&mut file, "{}", err) {
-                    Ok(()) => (),
-                    Err(e) => {
-                        eprintln!("ERROR WRITING TO LOG FILE: {}", e);
-                        eprintln!("{}", err);
-                    }
-                }
-            }
-        }
-    }
+    File(PathBuf),
 }
 
 pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -189,7 +153,10 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn handle_messages(receiver: &mpsc::Receiver<String>, filepath: &Path) -> anyhow::Result<()> {
+pub fn handle_messages(
+    receiver: &mpsc::Receiver<String>,
+    error_handler: ErrorHandler,
+) -> anyhow::Result<()> {
     let mut messages = Vec::with_capacity(100);
     for _ in 0..100 {
         match receiver.recv() {
@@ -203,19 +170,29 @@ pub fn handle_messages(receiver: &mpsc::Receiver<String>, filepath: &Path) -> an
     }
     let mut messages = messages.join("\n");
     messages.push_str("\n");
+    let messages = messages.as_bytes();
 
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&filepath)
-        .context("opening log file")?;
+    match error_handler {
+        ErrorHandler::Stderr => {
+            let mut stderr = stderr().lock();
+            stderr.write_all(&messages).context("write to stderr")?;
+            stderr.flush().context("flush stderr")?;
+        }
+        ErrorHandler::File(f) => {
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&f)
+                .context("opening log file")?;
 
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(&messages.as_bytes())
-        .context("write buf to log file")?;
+            let mut writer = BufWriter::new(file);
+            writer
+                .write_all(&messages)
+                .context("write buf to log file")?;
 
-    writer.flush().context("flush writer buffer")?;
+            writer.flush().context("flush log file buffer")?;
+        }
+    }
     Ok(())
 }
 

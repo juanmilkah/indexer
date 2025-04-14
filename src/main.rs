@@ -2,9 +2,7 @@
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use anyhow::Context;
-use indexer::{
-    handle_messages, index_documents, search_term, Config, DumpFormat, ErrorHandler, ErrorStream,
-};
+use indexer::{handle_messages, index_documents, search_term, Config, DumpFormat, ErrorHandler};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{fs, thread};
@@ -74,11 +72,11 @@ fn main() -> anyhow::Result<()> {
     let mut home_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
     home_dir.push(".indexer");
     let error_handler = match args.log_file {
-        Some(file) => ErrorHandler::new(ErrorStream::File(file)),
+        Some(file) => ErrorHandler::File(file),
         None => {
             let mut log_file = home_dir.clone();
             log_file.push("logs");
-            ErrorHandler::new(ErrorStream::File(log_file))
+            ErrorHandler::File(log_file)
         }
     };
 
@@ -121,10 +119,11 @@ fn main() -> anyhow::Result<()> {
                 sender,
             };
 
-            let filepath = cfg.filepath.clone();
+            let err_handler = cfg.error_handler.clone();
             thread::spawn(move || loop {
-                let _ = handle_messages(&receiver, &filepath);
+                let _ = handle_messages(&receiver, err_handler.clone());
             });
+
             index_documents(&cfg)?;
         }
         Commands::Search {
