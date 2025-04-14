@@ -7,23 +7,22 @@ use xml::reader::XmlEvent;
 use xml::EventReader;
 
 use crate::lexer::Lexer;
-use crate::ErrorHandler;
 
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 pub fn parse_csv_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
-        err_handler
+        let _ = err_handler
             .lock()
             .unwrap()
-            .print(&format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {:?}", filepath));
     }
     let reader = BufReader::new(File::open(filepath).context("open filepath")?);
     let mut rdr = csv::Reader::from_reader(reader);
@@ -46,14 +45,14 @@ pub fn parse_csv_document(
 
 pub fn parse_html_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
-        err_handler
+        let _ = err_handler
             .lock()
             .unwrap()
-            .print(&format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {:?}", filepath));
     }
     let document = fs::read_to_string(filepath)?;
     let parser = driver::parse_document(
@@ -75,14 +74,14 @@ pub fn parse_html_document(
 
 pub fn parse_xml_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
-        err_handler
+        let _ = err_handler
             .lock()
             .unwrap()
-            .print(&format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {:?}", filepath));
     }
 
     let file = File::open(filepath)?;
@@ -99,7 +98,7 @@ pub fn parse_xml_document(
                 tokens.append(&mut lex.get_tokens(stop_words));
             }
             Err(err) => {
-                err_handler.lock().unwrap().print(&format!("{err}"));
+                let _ = err_handler.lock().unwrap().send(format!("{err}"));
                 continue;
             }
             _ => {}
@@ -110,23 +109,23 @@ pub fn parse_xml_document(
 
 pub fn parse_pdf_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
-        err_handler
+        let _ = err_handler
             .lock()
             .unwrap()
-            .print(&format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {:?}", filepath));
     }
     let document = match PopplerDocument::new_from_file(filepath, None) {
         Ok(doc) => doc,
         Err(err) => {
             {
-                err_handler
+                let _ = err_handler
                     .lock()
                     .unwrap()
-                    .print(&format!("Failed to load document: {err}"));
+                    .send(format!("Failed to load document: {err}"));
             }
             return Err(anyhow::Error::new(err));
         }
@@ -153,21 +152,23 @@ pub fn parse_pdf_document(
 
 pub fn parse_txt_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    err_handler
-        .lock()
-        .unwrap()
-        .print(&format!("Indexing document: {:?}", filepath));
+    {
+        let _ = err_handler
+            .lock()
+            .unwrap()
+            .send(format!("Indexing document: {:?}", filepath));
+    }
     let content = match fs::read_to_string(filepath) {
         Ok(val) => val,
         Err(err) => {
             {
-                err_handler
+                let _ = err_handler
                     .lock()
                     .unwrap()
-                    .print(&format!("Failed to read file {:?} : {err}", filepath));
+                    .send(format!("Failed to read file {:?} : {err}", filepath));
             }
             return Err(anyhow::Error::new(err));
         }

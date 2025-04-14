@@ -2,10 +2,12 @@
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use anyhow::Context;
-use indexer::{index_documents, search_term, Config, DumpFormat, ErrorHandler, ErrorStream};
-use std::fs;
+use indexer::{
+    handle_messages, index_documents, search_term, Config, DumpFormat, ErrorHandler, ErrorStream,
+};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::{fs, thread};
 
 use clap::Parser;
 
@@ -79,10 +81,12 @@ fn main() -> anyhow::Result<()> {
             ErrorHandler::new(ErrorStream::File(log_file))
         }
     };
-    let error_handler = Arc::new(Mutex::new(error_handler));
 
     let mut indexfile = home_dir;
     indexfile.push("indexfile");
+
+    let (sender, receiver) = mpsc::channel();
+    let sender = Arc::new(Mutex::new(sender));
 
     match args.command {
         Commands::Index {
@@ -114,7 +118,13 @@ fn main() -> anyhow::Result<()> {
                 index_path,
                 error_handler,
                 dump_format,
+                sender,
             };
+
+            let filepath = cfg.filepath.clone();
+            thread::spawn(move || loop {
+                let _ = handle_messages(&receiver, &filepath);
+            });
             index_documents(&cfg)?;
         }
         Commands::Search {
@@ -132,10 +142,7 @@ fn main() -> anyhow::Result<()> {
             // i'm not really sure what i should do if
             // I get zero matches
             if result.is_empty() {
-                error_handler
-                    .lock()
-                    .unwrap()
-                    .print(&format!("No Zero Matches!"));
+                eprintln!("Zero Results");
                 return Ok(());
             }
 
@@ -147,15 +154,12 @@ fn main() -> anyhow::Result<()> {
                     .join("\n");
                 fs::write(f, result)?;
             } else {
-                let mut err_handler = error_handler.lock().unwrap();
                 if let Some(count) = result_count {
                     if result.len() > count {
                         result.truncate(count);
                     }
                 }
-                result
-                    .iter()
-                    .for_each(|r| err_handler.print(&format!("{:?}", r)));
+                result.iter().for_each(|r| println!("{:?}", r));
             }
         }
         Commands::Serve { index_file, port } => {
@@ -165,7 +169,7 @@ fn main() -> anyhow::Result<()> {
                 None => indexfile,
             };
 
-            run_server(&index_file, port, error_handler)?;
+            run_server(&index_file, port, sender)?;
         }
     }
     Ok(())

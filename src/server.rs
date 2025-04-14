@@ -2,31 +2,32 @@ use tiny_http::{Header, Method, Response, Server};
 
 use std::io;
 use std::path::Path;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use crate::html::HTML_DEFAULT;
-use crate::{search_term, ErrorHandler};
+use crate::search_term;
 
 pub fn run_server(
     index_file: &Path,
     port: u16,
-    err_handler: Arc<Mutex<ErrorHandler>>,
+    err_handler: Arc<Mutex<Sender<String>>>,
 ) -> io::Result<()> {
     let port = format!("localhost:{port}");
     let server = match Server::http(&port) {
         Ok(val) => val,
         Err(err) => {
-            err_handler
+            let _ = err_handler
                 .lock()
                 .unwrap()
-                .print(&format!("Failed to bind server to port {port}: {err}"));
+                .send(format!("Failed to bind server to port {port}: {err}"));
             return Err(io::Error::new(io::ErrorKind::ConnectionRefused, err));
         }
     };
     println!("Server listening on port {port}");
 
     for mut request in server.incoming_requests() {
-        err_handler.lock().unwrap().print(&format!(
+        let _ = err_handler.lock().unwrap().send(format!(
             "{method} {url}",
             method = request.method(),
             url = request.url()
@@ -55,13 +56,11 @@ pub fn run_server(
                     match search_term(&body, index_file) {
                         Ok(vals) => {
                             if !vals.is_empty() {
-                                let vals: Vec<u8> = vals
+                                let vals: Vec<String> = vals
                                     .iter()
-                                    .flat_map(|path| {
-                                        let path = path.to_string_lossy();
-                                        path.as_bytes().to_vec()
-                                    })
+                                    .map(|path| path.to_string_lossy().to_string())
                                     .collect();
+                                let vals = vals.join("\n");
                                 let response = Response::from_data(vals);
                                 let _ = request.respond(response);
                             } else {
