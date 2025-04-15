@@ -1,18 +1,20 @@
+#![feature(path_file_prefix)]
 pub mod html;
 pub mod lexer;
-pub mod models;
 pub mod parsers;
 pub mod server;
+pub mod tree;
 
 use anyhow::Context;
 use parsers::*;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use stop_words::LANGUAGE;
+use tree::{DocumentStore, MainIndex};
 
 use std::{
-    fs::{self, File},
-    io::{stderr, BufReader, BufWriter, Read, Write},
+    fs,
+    io::{stderr, BufWriter, Write},
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::SystemTime,
@@ -42,9 +44,10 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>
     let mut lex = lexer::Lexer::new(&text_chars);
     let stop_words = stop_words::get(LANGUAGE::English);
     let tokens = lex.get_tokens(&stop_words);
-    let index_table = get_index_table(index_file).context("get index table")?;
-    let model = models::Model::new(index_table);
-    Ok(model.search_terms(&tokens))
+    let main_index = MainIndex::new(index_file, 100).context("new main index")?;
+    let results = main_index.search(&tokens).context("query results")?;
+    let results: Vec<PathBuf> = results.iter().map(|(path, _)| path.to_path_buf()).collect();
+    Ok(results)
 }
 
 pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
@@ -56,7 +59,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         Vec::from([filepath])
     };
 
-    let index_table = get_index_table(&cfg.index_path).unwrap_or_default();
+    // let index_table = get_index_table(&cfg.index_path).unwrap_or_default();
 
     let mut extensions_map: FxHashMap<
         String,
@@ -72,34 +75,40 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     extensions_map.insert("md".to_string(), parse_txt_document);
 
     // process the documents in parallel
-    let model = Arc::new(Mutex::new(models::Model::new(index_table)));
+    let model = Arc::new(Mutex::new(
+        MainIndex::new(&cfg.index_path, 100).context("new main index")?,
+    ));
     let skipped_files = AtomicU64::new(0);
     let indexed_files = AtomicU64::new(0);
     let stop_words = stop_words::get(LANGUAGE::English);
     let err_sender = Arc::clone(&cfg.sender);
 
-    // let chunk_size = 100;
-    // docs.par_chunks(chunk_size).for_each(|chunk| {
     docs.par_iter().for_each(|doc| {
         // check if document index exists in the index_table;
         // if it exixts, check whether the file has been modified
         // since the last index
         // if yes then reindex the file
         // if no then skip the file
-        if let Some(is_expired) = doc_index_is_expired(doc, &model.lock().unwrap().index_table) {
-            if !is_expired {
-                skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return;
+        let model = Arc::clone(&model);
+        {
+            let doc_id = model.lock().unwrap().doc_store.get_id(doc);
+            if let Some(expired) = doc_index_is_expired(doc_id, &model.lock().unwrap().doc_store) {
+                if !expired {
+                    skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
             }
         }
-
         if let Some(ext) = doc.extension() {
             let ext = ext.to_string_lossy().to_string();
             if let Some(parser) = extensions_map.get(&ext) {
                 match parser(doc, err_sender.clone(), &stop_words) {
                     Ok(tokens) => {
                         let mut model = model.lock().unwrap();
-                        model.add_document(doc, &tokens);
+                        match model.add_document(doc, &tokens) {
+                            Ok(_) => (),
+                            Err(err) => eprintln!("ERROR: {}", err),
+                        }
                         indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return;
                     }
@@ -123,6 +132,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             .send(format!("Failed to parse document: {:?}", doc));
     });
 
+    model.lock().unwrap().commit().context("commit model")?;
     println!("Completed Indexing documents...");
     println!(
         "Indexed {} files",
@@ -133,22 +143,22 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         skipped_files.load(std::sync::atomic::Ordering::SeqCst)
     );
 
-    if indexed_files.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-        return Ok(());
-    }
+    // if indexed_files.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+    //     return Ok(());
+    // }
     // update the models idf
-    model.lock().unwrap().update_idf();
+    // model.lock().unwrap().update_idf();
 
-    println!("Writing into {:?}...", cfg.index_path);
-    // write the documents index_table in the provided file path
-    let file = BufWriter::new(File::create(&cfg.index_path)?);
-
-    match cfg.dump_format {
-        DumpFormat::Json => serde_json::to_writer(file, &model.lock().unwrap().index_table)
-            .context("serialise model into json")?,
-        DumpFormat::Bytes => bincode2::serialize_into(file, &model.lock().unwrap().index_table)
-            .context("serializing model into bytes")?,
-    };
+    // println!("Writing into {:?}...", cfg.index_path);
+    // // write the documents index_table in the provided file path
+    // let file = BufWriter::new(File::create(&cfg.index_path)?);
+    //
+    // match cfg.dump_format {
+    //     DumpFormat::Json => serde_json::to_writer(file, &model.lock().unwrap().index_table)
+    //         .context("serialise model into json")?,
+    //     DumpFormat::Bytes => bincode2::serialize_into(file, &model.lock().unwrap().index_table)
+    //         .context("serializing model into bytes")?,
+    // };
 
     Ok(())
 }
@@ -216,34 +226,16 @@ fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn get_index_table(filepath: &Path) -> anyhow::Result<models::IndexTable> {
-    let mut index_file = BufReader::new(File::open(filepath).context("open index file")?);
-    let mut buf = Vec::new();
-    index_file
-        .read_to_end(&mut buf)
-        .context("read index file")?;
-
-    let dump_format = match buf[0] {
-        b'{' => DumpFormat::Json,
-        _ => DumpFormat::Bytes,
-    };
-
-    let index_table: models::IndexTable = match dump_format {
-        DumpFormat::Bytes => {
-            bincode2::deserialize(&buf).context("deserializing model from bytes")?
-        }
-        DumpFormat::Json => serde_json::from_slice(&buf).context("deserialise model from json")?,
-    };
-
-    Ok(index_table)
-}
-
-fn doc_index_is_expired(doc: &PathBuf, index_table: &models::IndexTable) -> Option<bool> {
-    if let Some(doc_table) = index_table.tables.get(doc) {
+fn doc_index_is_expired(doc_id: u64, doc_store: &DocumentStore) -> Option<bool> {
+    if let Some(doc_info) = doc_store.id_to_doc_info.get(&doc_id) {
         let now = SystemTime::now();
-        let modified_at = Path::new(&doc).metadata().unwrap().modified().unwrap();
+        let modified_at = Path::new(&doc_info.path)
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
         let elapsed_since_modified = now.duration_since(modified_at).unwrap();
-        let elapsed_since_indexed = now.duration_since(doc_table.indexed_at).unwrap();
+        let elapsed_since_indexed = now.duration_since(doc_info.indexed_at).unwrap();
 
         return Some(elapsed_since_indexed > elapsed_since_modified);
     };
