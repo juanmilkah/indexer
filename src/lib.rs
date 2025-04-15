@@ -8,11 +8,11 @@ pub mod tree;
 use anyhow::Context;
 use parsers::*;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rustc_hash::FxHashMap;
 use stop_words::LANGUAGE;
 use tree::{DocumentStore, MainIndex};
 
 use std::{
+    collections::HashMap,
     fs,
     io::{stderr, BufWriter, Write},
     path::{Path, PathBuf},
@@ -23,14 +23,8 @@ use std::{
 pub struct Config {
     pub filepath: PathBuf,
     pub index_path: PathBuf,
-    pub dump_format: DumpFormat,
     pub error_handler: ErrorHandler,
     pub sender: Arc<Mutex<mpsc::Sender<String>>>,
-}
-
-pub enum DumpFormat {
-    Json,
-    Bytes,
 }
 
 #[derive(Clone)]
@@ -61,10 +55,10 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
 
     // let index_table = get_index_table(&cfg.index_path).unwrap_or_default();
 
-    let mut extensions_map: FxHashMap<
+    let mut extensions_map: HashMap<
         String,
         fn(&Path, Arc<Mutex<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
-    > = FxHashMap::default();
+    > = HashMap::new();
 
     extensions_map.insert("csv".to_string(), parse_csv_document);
     extensions_map.insert("html".to_string(), parse_html_document);
@@ -142,23 +136,6 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         "Skipped {} files",
         skipped_files.load(std::sync::atomic::Ordering::SeqCst)
     );
-
-    // if indexed_files.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-    //     return Ok(());
-    // }
-    // update the models idf
-    // model.lock().unwrap().update_idf();
-
-    // println!("Writing into {:?}...", cfg.index_path);
-    // // write the documents index_table in the provided file path
-    // let file = BufWriter::new(File::create(&cfg.index_path)?);
-    //
-    // match cfg.dump_format {
-    //     DumpFormat::Json => serde_json::to_writer(file, &model.lock().unwrap().index_table)
-    //         .context("serialise model into json")?,
-    //     DumpFormat::Bytes => bincode2::serialize_into(file, &model.lock().unwrap().index_table)
-    //         .context("serializing model into bytes")?,
-    // };
 
     Ok(())
 }

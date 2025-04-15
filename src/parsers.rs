@@ -1,6 +1,7 @@
+use anyhow::anyhow;
 use anyhow::Context;
 use html5ever::driver::{self, ParseOpts};
-use poppler::PopplerDocument;
+use lopdf;
 use scraper::{Html, HtmlTreeSink};
 use tendril::TendrilSink;
 use xml::reader::XmlEvent;
@@ -118,32 +119,18 @@ pub fn parse_pdf_document(
             .unwrap()
             .send(format!("Indexing document: {:?}", filepath));
     }
-    let document = match PopplerDocument::new_from_file(filepath, None) {
+
+    let mut tokens = Vec::new();
+    let doc = match lopdf::Document::load(filepath) {
         Ok(doc) => doc,
-        Err(err) => {
-            {
-                let _ = err_handler
-                    .lock()
-                    .unwrap()
-                    .send(format!("Failed to load document: {err}"));
-            }
-            return Err(anyhow::Error::new(err));
-        }
+        Err(err) => return Err(anyhow!(err)),
     };
 
-    let end = document.get_n_pages();
-    let mut tokens = Vec::new();
-
-    // I tried processing the doc in parallel
-    // Apparently the `poppler` crate does not impl `Send`
-    // I guess you'll just have to suck it up for huge pdfs
-    for i in 1..end {
-        if let Some(page) = document.get_page(i) {
-            if let Some(text) = page.get_text() {
-                let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
-                let mut lex = Lexer::new(&text_chars);
-                tokens.append(&mut lex.get_tokens(stop_words));
-            }
+    for (page_num, _) in doc.get_pages() {
+        if let Ok(text) = doc.extract_text(&[page_num]) {
+            let text_chars = text.to_lowercase().chars().collect::<Vec<char>>();
+            let mut lexer = Lexer::new(&text_chars);
+            tokens.append(&mut lexer.get_tokens(stop_words));
         }
     }
 

@@ -2,7 +2,7 @@
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use anyhow::Context;
-use indexer::{handle_messages, index_documents, search_term, Config, DumpFormat, ErrorHandler};
+use indexer::{handle_messages, index_documents, search_term, Config, ErrorHandler};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::{fs, thread};
@@ -38,19 +38,13 @@ enum Commands {
     Index {
         #[clap(short = 'p', long = "path", help = "Path to perfom action on")]
         path: Option<PathBuf>,
-        #[clap(short = 'o', long = "output", help = "Path to index file")]
-        output_file: Option<PathBuf>,
-        #[clap(
-            short = 'j',
-            long = "json",
-            help = "Dump the file index in json format"
-        )]
-        json: bool,
+        #[clap(short = 'o', long = "output", help = "Path to index files directory")]
+        output_directory: Option<PathBuf>,
     },
     /// Query some search term using the index
     Search {
-        #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: Option<PathBuf>,
+        #[arg(short = 'i', long = "index", help = "Path to index files directory")]
+        index_directory: Option<PathBuf>,
         #[arg(short = 'q', long = "query", help = "Query to search")]
         query: String,
         #[arg(short = 'o', long = "output", help = "Write result to file")]
@@ -61,7 +55,7 @@ enum Commands {
     /// Serve the search engine via http
     Serve {
         #[arg(short = 'i', long = "index", help = "Path to index file")]
-        index_file: Option<PathBuf>,
+        index_directory: Option<PathBuf>,
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u16>,
     },
@@ -69,19 +63,16 @@ enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let mut home_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
-    home_dir.push(".indexer");
+    let mut index_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
+    index_dir.push(".indexer");
     let error_handler = match args.log_file {
         Some(file) => ErrorHandler::File(file),
         None => {
-            let mut log_file = home_dir.clone();
+            let mut log_file = index_dir.clone();
             log_file.push("logs");
             ErrorHandler::File(log_file)
         }
     };
-
-    let mut indexfile = home_dir;
-    indexfile.push("indexfile");
 
     let (sender, receiver) = mpsc::channel();
     let sender = Arc::new(Mutex::new(sender));
@@ -89,16 +80,8 @@ fn main() -> anyhow::Result<()> {
     match args.command {
         Commands::Index {
             path,
-            output_file,
-
-            json,
+            output_directory,
         } => {
-            let dump_format = if json {
-                DumpFormat::Json
-            } else {
-                DumpFormat::Bytes
-            };
-
             let filepath = match path {
                 Some(p) => p,
                 None => {
@@ -107,15 +90,14 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            let index_path = match output_file {
-                Some(p) => p,
-                None => indexfile,
-            };
+            if output_directory.is_some() {
+                index_dir = output_directory.unwrap();
+            }
+
             let cfg = Config {
                 filepath,
-                index_path,
+                index_path: index_dir,
                 error_handler,
-                dump_format,
                 sender,
             };
 
@@ -127,14 +109,14 @@ fn main() -> anyhow::Result<()> {
             index_documents(&cfg)?;
         }
         Commands::Search {
-            index_file,
+            index_directory,
             query,
             output_file,
             result_count,
         } => {
-            let index_file = match index_file {
+            let index_file = match index_directory {
                 Some(p) => p,
-                None => indexfile,
+                None => index_dir,
             };
             let mut result = search_term(&query, &index_file)?;
 
@@ -161,14 +143,16 @@ fn main() -> anyhow::Result<()> {
                 result.iter().for_each(|r| println!("{:?}", r));
             }
         }
-        Commands::Serve { index_file, port } => {
+        Commands::Serve {
+            index_directory,
+            port,
+        } => {
             let port = port.unwrap_or(8765);
-            let index_file = match index_file {
-                Some(p) => p,
-                None => indexfile,
-            };
+            if index_directory.is_some() {
+                index_dir = index_directory.unwrap();
+            }
 
-            run_server(&index_file, port, sender)?;
+            run_server(&index_dir, port, sender)?;
         }
     }
     Ok(())

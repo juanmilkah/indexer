@@ -7,18 +7,11 @@ It employs the [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) algorithm 
 
 ## Features
 
-- Indexing pdf files in a directory
+- Indexing files in a directory
 - Querying of terms
 - Serve via http
 
 ## Installation
-
-You may need `libpoppler-glib` installed on you system.  
-For arch users
-
-```bash
-sudo pacman -S poppler-glib
-```
 
 ```bash
 git clone https://github.com/juanmilkah/indexer
@@ -28,8 +21,8 @@ bash build.sh
 
 ## Usage
 
-The program uses `$HOME/.indexer/indexfile` as the default path for the 
-index_file.  
+The program uses `$HOME/.indexer` as the default path for the 
+index files.  
 
 - ### Indexing
   If path to docs is not provided it falls back to the current directory.  
@@ -37,10 +30,10 @@ index_file.
   (pdf, txt, md, xml, xhtml, html, csv)
 
 ```bash
-indexer index -p [path_to_document] -o [path_to_output_file] [json_format]
+indexer index -p [path_to_document] -o [path_to_output_file] 
 ```
 
-You can also redirect Stderr to a file via the `log` argument.
+You can also specify a log file via the `log` argument.
 
 ```bash
 indexer --log indexer.log index -p <~/documents> 
@@ -49,7 +42,7 @@ indexer --log indexer.log index -p <~/documents>
 - ### Querying
 
 ```bash
-indexer query  -q <query> -i [path_to_index_file] -o [output_file] --count [10]
+indexer query  -q <query> -i [path_to_index_directory] -o [output_file] --count [10]
 ```
 
 - ### Serving via http server
@@ -57,7 +50,7 @@ indexer query  -q <query> -i [path_to_index_file] -o [output_file] --count [10]
   The average latency for a query is `45ms`
 
 ```bash
-indexer serve -i [path_to_index_file] -p [port]
+indexer serve -i [path_to_index_directory] -p [port]
 ```
 
 ```bash
@@ -75,16 +68,6 @@ indexer --help
 ```bash
 indexer --version
 ```
-
-### TODO
-
-Additional optimizations.
-
-Memory-mapped files: For very large datasets, consider using memory-mapped files (mmap) for faster I/O.
-Streaming parser: Implement streaming parsers for large documents to avoid loading entire files into memory.
-Compression: Use fast compression algorithms like LZ4 or Zstd for the index to reduce I/O overhead.
-Incremental updates: Implement a more efficient incremental update mechanism instead of full re-indexing.
-Async I/O: Consider using async I/O with Tokio for file operations to avoid blocking threads.
 
 ## Licensing
 
