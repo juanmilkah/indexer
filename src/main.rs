@@ -1,7 +1,7 @@
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use indexer::{handle_messages, index_documents, search_term, Config, ErrorHandler};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -40,6 +40,12 @@ enum Commands {
         path: Option<PathBuf>,
         #[clap(short = 'o', long = "output", help = "Path to index files directory")]
         output_directory: Option<PathBuf>,
+        #[clap(
+            short = 'z',
+            long = "hidden",
+            help = "Index hidden files and directories"
+        )]
+        hidden: bool,
     },
     /// Query some search term using the index
     Search {
@@ -81,6 +87,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Index {
             path,
             output_directory,
+            hidden,
         } => {
             let filepath = match path {
                 Some(p) => p,
@@ -91,7 +98,12 @@ fn main() -> anyhow::Result<()> {
             };
 
             if output_directory.is_some() {
-                index_dir = output_directory.unwrap();
+                let path = output_directory.unwrap();
+                match fs::create_dir_all(&path) {
+                    Ok(_) => (),
+                    Err(err) => return Err(anyhow!(format!("ERROR: create ouput dir: {}", err))),
+                }
+                index_dir = path;
             }
 
             let cfg = Config {
@@ -99,6 +111,7 @@ fn main() -> anyhow::Result<()> {
                 index_path: index_dir,
                 error_handler,
                 sender,
+                hidden,
             };
 
             let err_handler = cfg.error_handler.clone();

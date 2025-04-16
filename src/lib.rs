@@ -21,10 +21,11 @@ use std::{
 };
 
 pub struct Config {
-    pub filepath: PathBuf,
-    pub index_path: PathBuf,
-    pub error_handler: ErrorHandler,
-    pub sender: Arc<Mutex<mpsc::Sender<String>>>,
+    pub hidden: bool,                /* allow indexing hidden directories and files*/
+    pub filepath: PathBuf,           /* filepath to perform indexing on*/
+    pub index_path: PathBuf,         /* path to index directory*/
+    pub error_handler: ErrorHandler, /* error output stream*/
+    pub sender: Arc<Mutex<mpsc::Sender<String>>>, /*send errors*/
 }
 
 #[derive(Clone)]
@@ -38,7 +39,7 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>
     let mut lex = lexer::Lexer::new(&text_chars);
     let stop_words = stop_words::get(LANGUAGE::English);
     let tokens = lex.get_tokens(&stop_words);
-    let main_index = MainIndex::new(index_file, 100).context("new main index")?;
+    let main_index = MainIndex::new(index_file).context("new main index")?;
     let results = main_index.search(&tokens).context("query results")?;
     let results: Vec<PathBuf> = results.iter().map(|(path, _)| path.to_path_buf()).collect();
     Ok(results)
@@ -48,6 +49,14 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     println!("Indexing documents...");
     let filepath = PathBuf::from(&cfg.filepath);
     let docs = if filepath.is_dir() {
+        let basename = match filepath.file_name() {
+            Some(v) => v.to_string_lossy().to_string(),
+            None => "".to_string(),
+        };
+        if basename.starts_with(".") && !cfg.hidden {
+            eprintln!("Provide the `hidden` flag to index hidden directories");
+            return Ok(());
+        }
         read_files_recursively(&filepath)?
     } else {
         Vec::from([filepath])
@@ -70,60 +79,75 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
 
     // process the documents in parallel
     let model = Arc::new(Mutex::new(
-        MainIndex::new(&cfg.index_path, 100).context("new main index")?,
+        MainIndex::new(&cfg.index_path).context("new main index")?,
     ));
     let skipped_files = AtomicU64::new(0);
     let indexed_files = AtomicU64::new(0);
     let stop_words = stop_words::get(LANGUAGE::English);
     let err_sender = Arc::clone(&cfg.sender);
 
-    docs.par_iter().for_each(|doc| {
-        // check if document index exists in the index_table;
-        // if it exixts, check whether the file has been modified
-        // since the last index
-        // if yes then reindex the file
-        // if no then skip the file
-        let model = Arc::clone(&model);
-        {
-            let doc_id = model.lock().unwrap().doc_store.get_id(doc);
-            if let Some(expired) = doc_index_is_expired(doc_id, &model.lock().unwrap().doc_store) {
-                if !expired {
-                    skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return;
-                }
-            }
-        }
-        if let Some(ext) = doc.extension() {
-            let ext = ext.to_string_lossy().to_string();
-            if let Some(parser) = extensions_map.get(&ext) {
-                match parser(doc, err_sender.clone(), &stop_words) {
-                    Ok(tokens) => {
-                        let mut model = model.lock().unwrap();
-                        match model.add_document(doc, &tokens) {
-                            Ok(_) => (),
-                            Err(err) => eprintln!("ERROR: {}", err),
+    let chunk_size = 100;
+    docs.chunks(chunk_size).for_each(|chunk| {
+        chunk.par_iter().for_each(|doc| {
+            // check if document index exists in the doc_store;
+            // if it exixts, check whether the file has been modified
+            // since the last time is was indexed
+            // if yes then reindex the file
+            // if no then skip the file
+            let model = Arc::clone(&model);
+            {
+                match doc.extension() {
+                    Some(v) => {
+                        let v = v.to_string_lossy().to_string();
+                        if extensions_map.get(&v).is_none() {
+                            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
                         }
-                        indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        return;
                     }
-                    Err(err) => {
+                    None => return,
+                }
+                let doc_id = model.lock().unwrap().doc_store.get_id(doc);
+                if let Some(expired) =
+                    doc_index_is_expired(doc_id, &model.lock().unwrap().doc_store)
+                {
+                    if !expired {
                         skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let _ = Arc::clone(&cfg.sender)
-                            .lock()
-                            .unwrap()
-                            .send(format!("Skippped document: {:?}: {err}", doc));
                         return;
                     }
                 }
             }
-        }
+            if let Some(ext) = doc.extension() {
+                let ext = ext.to_string_lossy().to_string();
+                if let Some(parser) = extensions_map.get(&ext) {
+                    match parser(doc, err_sender.clone(), &stop_words) {
+                        Ok(tokens) => {
+                            let mut model = model.lock().unwrap();
+                            match model.add_document(doc, &tokens) {
+                                Ok(_) => (),
+                                Err(err) => eprintln!("ERROR: {}", err),
+                            }
+                            indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
+                        }
+                        Err(err) => {
+                            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let _ = Arc::clone(&cfg.sender)
+                                .lock()
+                                .unwrap()
+                                .send(format!("Skippped document: {:?}: {err}", doc));
+                            return;
+                        }
+                    }
+                }
+            }
 
-        skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _ = cfg
-            .sender
-            .lock()
-            .unwrap()
-            .send(format!("Failed to parse document: {:?}", doc));
+            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = cfg
+                .sender
+                .lock()
+                .unwrap()
+                .send(format!("Failed to parse document: {:?}", doc));
+        });
     });
 
     model.lock().unwrap().commit().context("commit model")?;
@@ -198,6 +222,8 @@ fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
                 files.push(path);
             }
         }
+    } else {
+        files.push(files_dir.to_path_buf());
     }
 
     Ok(files)

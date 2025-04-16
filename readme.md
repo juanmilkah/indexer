@@ -30,23 +30,23 @@ index files.
   (pdf, txt, md, xml, xhtml, html, csv)
 
 ```bash
-indexer index -p [path_to_document] -o [path_to_output_file] 
+indexer index -p [path_to_document]
 ```
 
 You can also specify a log file via the `log` argument.
 
 ```bash
-indexer --log indexer.log index -p <~/documents> 
+indexer --log indexer.log index
 ```
 
 - ### Querying
 
 ```bash
-indexer query  -q <query> -i [path_to_index_directory] -o [output_file] --count [10]
+indexer query  -q <query> -i [path_to_index_directory] --count [10] 
 ```
 
 - ### Serving via http server
-  Localhost on port `8080`
+  Localhost on port `8765`
   The average latency for a query is `45ms`
 
 ```bash

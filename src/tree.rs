@@ -188,8 +188,10 @@ pub struct MainIndex {
     pub max_segment_docs: u64,
 }
 
+const MAX_SEGMENT_DOCS: u64 = 100;
+
 impl MainIndex {
-    pub fn new(index_dir: &Path, max_seg_docs: u64) -> anyhow::Result<Self> {
+    pub fn new(index_dir: &Path) -> anyhow::Result<Self> {
         // TODO: load doc store, discover segments
         let docstore_filepath = index_dir.join("docstore.bin");
 
@@ -243,7 +245,7 @@ impl MainIndex {
             active_segments: segments,
             current_segment: InMemorySegment::default(),
             next_segment,
-            max_segment_docs: max_seg_docs,
+            max_segment_docs: MAX_SEGMENT_DOCS,
         })
     }
 
