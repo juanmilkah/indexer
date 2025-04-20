@@ -192,7 +192,6 @@ const MAX_SEGMENT_DOCS: u64 = 100;
 
 impl MainIndex {
     pub fn new(index_dir: &Path) -> anyhow::Result<Self> {
-        // TODO: load doc store, discover segments
         let docstore_filepath = index_dir.join("docstore.bin");
 
         let doc_store: DocumentStore = {
@@ -231,6 +230,7 @@ impl MainIndex {
 
         let next_segment: u64 = if !segments.is_empty() {
             if let Some(value) = segments.iter().max() {
+                //TODO: is the last segment full?
                 value.to_owned() + 1
             } else {
                 1

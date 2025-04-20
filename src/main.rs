@@ -67,14 +67,18 @@ enum Commands {
     },
 }
 
-fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+fn get_storage() -> PathBuf {
     let mut index_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
     index_dir.push(".indexer");
+    index_dir
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
     let error_handler = match args.log_file {
         Some(file) => ErrorHandler::File(file),
         None => {
-            let mut log_file = index_dir.clone();
+            let mut log_file = get_storage();
             log_file.push("logs");
             ErrorHandler::File(log_file)
         }
@@ -97,18 +101,20 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            if output_directory.is_some() {
+            let index_path = if output_directory.is_some() {
                 let path = output_directory.unwrap();
                 match fs::create_dir_all(&path) {
                     Ok(_) => (),
                     Err(err) => return Err(anyhow!(format!("ERROR: create ouput dir: {}", err))),
                 }
-                index_dir = path;
-            }
+                path
+            } else {
+                get_storage()
+            };
 
             let cfg = Config {
                 filepath,
-                index_path: index_dir,
+                index_path,
                 error_handler,
                 sender,
                 hidden,
@@ -127,11 +133,11 @@ fn main() -> anyhow::Result<()> {
             output_file,
             result_count,
         } => {
-            let index_file = match index_directory {
+            let index_files = match index_directory {
                 Some(p) => p,
-                None => index_dir,
+                None => get_storage(),
             };
-            let mut result = search_term(&query, &index_file)?;
+            let mut result = search_term(&query, &index_files)?;
 
             // i'm not really sure what i should do if
             // I get zero matches
@@ -143,9 +149,12 @@ fn main() -> anyhow::Result<()> {
             if let Some(ref f) = output_file {
                 let result = result
                     .iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect::<Vec<String>>()
-                    .join("\n");
+                    .map(|(path, score)| {
+                        let path = path.to_string_lossy().to_string();
+                        format!("{}: {}", score, path)
+                    })
+                    .collect::<Vec<String>>();
+                let result = result.join("");
                 fs::write(f, result)?;
             } else {
                 if let Some(count) = result_count {
@@ -153,7 +162,7 @@ fn main() -> anyhow::Result<()> {
                         result.truncate(count);
                     }
                 }
-                result.iter().for_each(|r| println!("{:?}", r));
+                result.iter().for_each(|(p, c)| println!("{}: {:?}", c, p));
             }
         }
         Commands::Serve {
@@ -161,11 +170,12 @@ fn main() -> anyhow::Result<()> {
             port,
         } => {
             let port = port.unwrap_or(8765);
-            if index_directory.is_some() {
-                index_dir = index_directory.unwrap();
-            }
+            let index_files = match index_directory {
+                Some(p) => p,
+                None => get_storage(),
+            };
 
-            run_server(&index_dir, port, sender)?;
+            run_server(&index_files, port, sender)?;
         }
     }
     Ok(())

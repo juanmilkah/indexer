@@ -58,7 +58,7 @@ pub fn run_server(
                             if !vals.is_empty() {
                                 let vals: Vec<String> = vals
                                     .iter()
-                                    .map(|path| path.to_string_lossy().to_string())
+                                    .map(|(path, _score)| path.to_string_lossy().to_string())
                                     .collect();
                                 let vals = vals.join("\n");
                                 let response = Response::from_data(vals);

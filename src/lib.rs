@@ -1,4 +1,6 @@
 #![feature(path_file_prefix)]
+#![feature(file_buffered)]
+
 pub mod html;
 pub mod lexer;
 pub mod parsers;
@@ -14,7 +16,7 @@ use tree::{DocumentStore, MainIndex};
 use std::{
     collections::HashMap,
     fs,
-    io::{stderr, BufWriter, Write},
+    io::{stderr, Write},
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::SystemTime,
@@ -34,14 +36,13 @@ pub enum ErrorHandler {
     File(PathBuf),
 }
 
-pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf, f64)>> {
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = lexer::Lexer::new(&text_chars);
     let stop_words = stop_words::get(LANGUAGE::English);
     let tokens = lex.get_tokens(&stop_words);
     let main_index = MainIndex::new(index_file).context("new main index")?;
     let results = main_index.search(&tokens).context("query results")?;
-    let results: Vec<PathBuf> = results.iter().map(|(path, _)| path.to_path_buf()).collect();
     Ok(results)
 }
 
@@ -76,6 +77,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     extensions_map.insert("xhtml".to_string(), parse_xml_document);
     extensions_map.insert("text".to_string(), parse_txt_document);
     extensions_map.insert("md".to_string(), parse_txt_document);
+    extensions_map.shrink_to_fit();
 
     // process the documents in parallel
     let model = Arc::new(Mutex::new(
@@ -85,6 +87,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     let indexed_files = AtomicU64::new(0);
     let stop_words = stop_words::get(LANGUAGE::English);
     let err_sender = Arc::clone(&cfg.sender);
+    let total_size = AtomicU64::new(0);
 
     let chunk_size = 100;
     docs.chunks(chunk_size).for_each(|chunk| {
@@ -106,10 +109,9 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                     }
                     None => return,
                 }
-                let doc_id = model.lock().unwrap().doc_store.get_id(doc);
-                if let Some(expired) =
-                    doc_index_is_expired(doc_id, &model.lock().unwrap().doc_store)
-                {
+                let mut model = model.lock().unwrap();
+                let doc_id = &model.doc_store.get_id(doc);
+                if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store) {
                     if !expired {
                         skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return;
@@ -126,6 +128,8 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                                 Ok(_) => (),
                                 Err(err) => eprintln!("ERROR: {}", err),
                             }
+                            let file_size = doc.metadata().unwrap().len();
+                            total_size.fetch_add(file_size, std::sync::atomic::Ordering::Relaxed);
                             indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
@@ -161,6 +165,11 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         skipped_files.load(std::sync::atomic::Ordering::SeqCst)
     );
 
+    println!(
+        "Total files size: {} Mib",
+        total_size.load(std::sync::atomic::Ordering::SeqCst) / 1024 / 1024
+    );
+
     Ok(())
 }
 
@@ -168,40 +177,24 @@ pub fn handle_messages(
     receiver: &mpsc::Receiver<String>,
     error_handler: ErrorHandler,
 ) -> anyhow::Result<()> {
-    let mut messages = Vec::with_capacity(100);
-    for _ in 0..100 {
-        match receiver.recv() {
-            Ok(message) => messages.push(message),
-            Err(_) => break,
-        }
-    }
-
-    if messages.is_empty() {
-        return Ok(());
-    }
-    let mut messages = messages.join("\n");
-    messages.push_str("\n");
-    let messages = messages.as_bytes();
+    let message = match receiver.recv() {
+        Ok(message) => message,
+        Err(_) => return Ok(()),
+    };
 
     match error_handler {
         ErrorHandler::Stderr => {
             let mut stderr = stderr().lock();
-            stderr.write_all(&messages).context("write to stderr")?;
-            stderr.flush().context("flush stderr")?;
+            let _ = stderr.write(message.as_bytes());
         }
         ErrorHandler::File(f) => {
-            let file = fs::OpenOptions::new()
+            let mut file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&f)
                 .context("opening log file")?;
 
-            let mut writer = BufWriter::new(file);
-            writer
-                .write_all(&messages)
-                .context("write buf to log file")?;
-
-            writer.flush().context("flush log file buffer")?;
+            let _ = writeln!(file, "{}", message);
         }
     }
     Ok(())
