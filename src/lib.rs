@@ -1,5 +1,4 @@
 #![feature(path_file_prefix)]
-#![feature(file_buffered)]
 
 pub mod html;
 pub mod lexer;
@@ -8,6 +7,7 @@ pub mod server;
 pub mod tree;
 
 use anyhow::Context;
+use indicatif::ProgressBar;
 use parsers::*;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use stop_words::LANGUAGE;
@@ -62,6 +62,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     } else {
         Vec::from([filepath])
     };
+    let bar = ProgressBar::new(docs.len() as u64);
 
     // let index_table = get_index_table(&cfg.index_path).unwrap_or_default();
 
@@ -98,6 +99,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             // if yes then reindex the file
             // if no then skip the file
             let model = Arc::clone(&model);
+            bar.inc(1);
             {
                 match doc.extension() {
                     Some(v) => {
@@ -154,6 +156,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         });
     });
 
+    bar.finish();
     model.lock().unwrap().commit().context("commit model")?;
     println!("Completed Indexing documents...");
     println!(
