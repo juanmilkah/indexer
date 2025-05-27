@@ -1,6 +1,3 @@
-#[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 use anyhow::{anyhow, Context};
 use indexer::{handle_messages, index_documents, search_term, Config, ErrorHandler};
 use std::path::{Path, PathBuf};
