@@ -59,10 +59,7 @@ impl DocumentStore {
     }
 
     fn get_path(&self, id: DocId) -> Option<&PathBuf> {
-        match self.id_to_doc_info.get(&id) {
-            Some(info) => Some(&info.path),
-            None => None,
-        }
+        self.id_to_doc_info.get(&id).map(|info| &info.path)
     }
 
     fn total_docs(&self) -> u64 {
@@ -225,16 +222,7 @@ impl MainIndex {
             }
         }
 
-        let next_segment: u64 = if !segments.is_empty() {
-            if let Some(value) = segments.iter().max() {
-                //TODO: is the last segment full?
-                value.to_owned() + 1
-            } else {
-                1
-            }
-        } else {
-            1
-        };
+        let next_segment = segments.iter().max().cloned().unwrap_or(0) + 1;
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
