@@ -60,7 +60,7 @@ impl<'a> Lexer<'a> {
 
     pub fn get_tokens(&mut self, stop_words: &[String]) -> Vec<String> {
         let mut tokens = Vec::new();
-        while let Some(token) = self.next() {
+        for token in self.by_ref() {
             tokens.push(token);
         }
 

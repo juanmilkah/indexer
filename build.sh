@@ -1,3 +1,5 @@
+set -e
+
 echo "Building project..."
 
 cargo build --release

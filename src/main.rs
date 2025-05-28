@@ -92,21 +92,19 @@ fn main() -> anyhow::Result<()> {
         } => {
             let filepath = match path {
                 Some(p) => p,
-                None => {
-                    let current_dir = std::env::current_dir().context("get current directory")?;
-                    current_dir
-                }
+                None => std::env::current_dir().context("get current directory")?,
             };
 
-            let index_path = if output_directory.is_some() {
-                let path = output_directory.unwrap();
-                match fs::create_dir_all(&path) {
-                    Ok(_) => (),
-                    Err(err) => return Err(anyhow!(format!("ERROR: create ouput dir: {}", err))),
+            let index_path = {
+                if let Some(path) = output_directory {
+                    match fs::create_dir_all(&path) {
+                        Ok(_) => (),
+                        Err(err) => return Err(anyhow!(format!("ERROR: create ouput dir: {err}"))),
+                    }
+                    path
+                } else {
+                    get_storage()
                 }
-                path
-            } else {
-                get_storage()
             };
 
             let cfg = Config {
@@ -148,7 +146,7 @@ fn main() -> anyhow::Result<()> {
                     .iter()
                     .map(|(path, score)| {
                         let path = path.to_string_lossy().to_string();
-                        format!("{}: {}", score, path)
+                        format!("{score}: {path}")
                     })
                     .collect::<Vec<String>>();
                 let result = result.join("");
@@ -159,7 +157,7 @@ fn main() -> anyhow::Result<()> {
                         result.truncate(count);
                     }
                 }
-                result.iter().for_each(|(p, c)| println!("{}: {:?}", c, p));
+                result.iter().for_each(|(p, c)| println!("{c}: {p:?}"));
             }
         }
         Commands::Serve {

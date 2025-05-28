@@ -23,7 +23,7 @@ pub fn parse_csv_document(
         let _ = err_handler
             .lock()
             .unwrap()
-            .send(format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {filepath:?}"));
     }
     let reader = BufReader::new(File::open(filepath).context("open filepath")?);
     let mut rdr = csv::Reader::from_reader(reader);
@@ -53,7 +53,7 @@ pub fn parse_html_document(
         let _ = err_handler
             .lock()
             .unwrap()
-            .send(format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {filepath:?}"));
     }
     let document = fs::read_to_string(filepath)?;
     let parser = driver::parse_document(
@@ -82,7 +82,7 @@ pub fn parse_xml_document(
         let _ = err_handler
             .lock()
             .unwrap()
-            .send(format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {filepath:?}"));
     }
 
     let file = File::open(filepath)?;
@@ -117,7 +117,7 @@ pub fn parse_pdf_document(
         let _ = err_handler
             .lock()
             .unwrap()
-            .send(format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {filepath:?}"));
     }
 
     let mut tokens = Vec::new();
@@ -146,7 +146,7 @@ pub fn parse_txt_document(
         let _ = err_handler
             .lock()
             .unwrap()
-            .send(format!("Indexing document: {:?}", filepath));
+            .send(format!("Indexing document: {filepath:?}"));
     }
     let content = match fs::read_to_string(filepath) {
         Ok(val) => val,
@@ -155,7 +155,7 @@ pub fn parse_txt_document(
                 let _ = err_handler
                     .lock()
                     .unwrap()
-                    .send(format!("Failed to read file {:?} : {err}", filepath));
+                    .send(format!("Failed to read file {filepath:?} : {err}"));
             }
             return Err(anyhow::Error::new(err));
         }

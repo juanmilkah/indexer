@@ -19,7 +19,7 @@ use std::{
     io::{stderr, Write},
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 pub struct Config {
@@ -46,6 +46,11 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf
     Ok(results)
 }
 
+type ExtensionToParser = HashMap<
+    String,
+    fn(&Path, Arc<Mutex<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
+>;
+
 pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     println!("Indexing documents...");
     let filepath = PathBuf::from(&cfg.filepath);
@@ -62,14 +67,10 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     } else {
         Vec::from([filepath])
     };
-    let bar = ProgressBar::new(docs.len() as u64);
+    let bar = ProgressBar::new_spinner();
+    bar.enable_steady_tick(Duration::from_millis(100));
 
-    // let index_table = get_index_table(&cfg.index_path).unwrap_or_default();
-
-    let mut extensions_map: HashMap<
-        String,
-        fn(&Path, Arc<Mutex<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
-    > = HashMap::new();
+    let mut extensions_map: ExtensionToParser = HashMap::new();
 
     extensions_map.insert("csv".to_string(), parse_csv_document);
     extensions_map.insert("html".to_string(), parse_html_document);
@@ -99,12 +100,11 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             // if yes then reindex the file
             // if no then skip the file
             let model = Arc::clone(&model);
-            bar.inc(1);
             {
                 match doc.extension() {
                     Some(v) => {
                         let v = v.to_string_lossy().to_string();
-                        if extensions_map.get(&v).is_none() {
+                        if !extensions_map.contains_key(&v) {
                             skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
@@ -128,7 +128,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                             let mut model = model.lock().unwrap();
                             match model.add_document(doc, &tokens) {
                                 Ok(_) => (),
-                                Err(err) => eprintln!("ERROR: {}", err),
+                                Err(err) => eprintln!("ERROR: {err}"),
                             }
                             let file_size = doc.metadata().unwrap().len();
                             total_size.fetch_add(file_size, std::sync::atomic::Ordering::Relaxed);
@@ -140,7 +140,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                             let _ = Arc::clone(&cfg.sender)
                                 .lock()
                                 .unwrap()
-                                .send(format!("Skippped document: {:?}: {err}", doc));
+                                .send(format!("Skippped document: {doc:?}: {err}"));
                             return;
                         }
                     }
@@ -152,7 +152,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                 .sender
                 .lock()
                 .unwrap()
-                .send(format!("Failed to parse document: {:?}", doc));
+                .send(format!("Failed to parse document: {doc:?}"));
         });
     });
 
@@ -197,7 +197,7 @@ pub fn handle_messages(
                 .open(&f)
                 .context("opening log file")?;
 
-            let _ = writeln!(file, "{}", message);
+            let _ = writeln!(file, "{message}");
         }
     }
     Ok(())

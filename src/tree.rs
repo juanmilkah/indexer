@@ -125,7 +125,7 @@ fn flush_segment(
         return Ok(());
     }
 
-    let segment_dir = index_dir.join(format!("segment_{}", segment_id));
+    let segment_dir = index_dir.join(format!("segment_{segment_id}"));
     fs::create_dir_all(&segment_dir).context("create segment dir")?;
     let dict_path = segment_dir.join("term.dict");
     let postings_path = segment_dir.join("postings.bin");
@@ -175,7 +175,7 @@ fn flush_segment(
     segment.postings.clear();
     segment.doc_count = 0;
 
-    println!("Flushed segment_{}", segment_id);
+    println!("Flushed segment_{segment_id}");
     Ok(())
 }
 
@@ -199,10 +199,7 @@ impl MainIndex {
                 Ok(f) => {
                     let mut reader = BufReader::new(f);
 
-                    match bincode2::deserialize_from(&mut reader) {
-                        Ok(store) => store,
-                        Err(_) => DocumentStore::default(),
-                    }
+                    bincode2::deserialize_from(&mut reader).unwrap_or_default()
                 }
                 Err(_) => DocumentStore::default(),
             }
@@ -300,7 +297,7 @@ impl MainIndex {
         for &seg_id in &self.active_segments {
             let dict_path = self
                 .index_dir
-                .join(format!("segment_{}", seg_id))
+                .join(format!("segment_{seg_id}"))
                 .join("term.dict");
             let mut reader = BufReader::new(File::open(dict_path).context("open dict path")?);
 
@@ -312,7 +309,7 @@ impl MainIndex {
                     terms_info_cache
                         .entry(token.to_string())
                         .or_default()
-                        .push((seg_id, metadata.clone()));
+                        .push((seg_id, *metadata));
 
                     *global_dfs.entry(token.to_string()).or_insert(0) += metadata.df;
                 }
@@ -332,7 +329,7 @@ impl MainIndex {
                 for (seg_id, metadata) in postings_hit {
                     let posting_path = self
                         .index_dir
-                        .join(format!("segment_{}", seg_id))
+                        .join(format!("segment_{seg_id}"))
                         .join("postings.bin");
                     let mut reader =
                         BufReader::new(File::open(&posting_path).context("open postings path")?);
@@ -357,7 +354,9 @@ impl MainIndex {
         let mut results: Vec<(PathBuf, f64)> = Vec::new();
         for (doc_id, score) in scores {
             let path = self.doc_store.get_path(doc_id).unwrap();
-            results.push((path.clone(), score));
+            if score != 0.0 {
+                results.push((path.clone(), score));
+            }
         }
 
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
