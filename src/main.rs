@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Context};
-use indexer::{handle_messages, index_documents, search_term, Config, ErrorHandler};
+use anyhow::{Context, anyhow};
+use indexer::{Config, ErrorHandler, handle_messages, index_documents, search_term};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::{fs, thread};
 
 use clap::Parser;
@@ -67,18 +67,21 @@ enum Commands {
 fn get_storage() -> PathBuf {
     let mut index_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
     index_dir.push(".indexer");
+    if !index_dir.exists() {
+        fs::create_dir(&index_dir)
+            .map_err(|err| eprintln!("Create .indexer dir: {}", err))
+            .unwrap();
+    }
     index_dir
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let mut log_file = get_storage();
+    log_file.push("logs");
     let error_handler = match args.log_file {
         Some(file) => ErrorHandler::File(file),
-        None => {
-            let mut log_file = get_storage();
-            log_file.push("logs");
-            ErrorHandler::File(log_file)
-        }
+        None => ErrorHandler::File(log_file.clone()),
     };
 
     let (sender, receiver) = mpsc::channel();
@@ -116,11 +119,14 @@ fn main() -> anyhow::Result<()> {
             };
 
             let err_handler = cfg.error_handler.clone();
-            thread::spawn(move || loop {
-                let _ = handle_messages(&receiver, err_handler.clone());
+            thread::spawn(move || {
+                loop {
+                    let _ = handle_messages(&receiver, err_handler.clone());
+                }
             });
 
             index_documents(&cfg)?;
+            println!("Logs saved to: {:?}", log_file);
         }
         Commands::Search {
             index_directory,

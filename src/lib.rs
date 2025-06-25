@@ -1,4 +1,4 @@
-#![feature(path_file_prefix)]
+// #![feature(path_file_prefix)]
 
 pub mod html;
 pub mod lexer;
@@ -16,9 +16,10 @@ use tree::{DocumentStore, MainIndex};
 use std::{
     collections::HashMap,
     fs,
-    io::{stderr, Write},
+    io::{Write, stderr},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::{Duration, SystemTime},
 };
 
@@ -63,7 +64,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             eprintln!("Provide the `hidden` flag to index hidden directories");
             return Ok(());
         }
-        read_files_recursively(&filepath)?
+        read_files_recursively(&filepath, cfg.hidden)?
     } else {
         Vec::from([filepath])
     };
@@ -77,7 +78,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     extensions_map.insert("pdf".to_string(), parse_pdf_document);
     extensions_map.insert("xml".to_string(), parse_xml_document);
     extensions_map.insert("xhtml".to_string(), parse_xml_document);
-    extensions_map.insert("text".to_string(), parse_txt_document);
+    extensions_map.insert("txt".to_string(), parse_txt_document);
     extensions_map.insert("md".to_string(), parse_txt_document);
     extensions_map.shrink_to_fit();
 
@@ -85,17 +86,16 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     let model = Arc::new(Mutex::new(
         MainIndex::new(&cfg.index_path).context("new main index")?,
     ));
-    let skipped_files = AtomicU64::new(0);
     let indexed_files = AtomicU64::new(0);
     let stop_words = stop_words::get(LANGUAGE::English);
     let err_sender = Arc::clone(&cfg.sender);
-    let total_size = AtomicU64::new(0);
+    let kilobytes = AtomicU64::new(0);
 
     let chunk_size = 100;
     docs.chunks(chunk_size).for_each(|chunk| {
         chunk.par_iter().for_each(|doc| {
             // check if document index exists in the doc_store;
-            // if it exixts, check whether the file has been modified
+            // if it exists, check whether the file has been modified
             // since the last time is was indexed
             // if yes then reindex the file
             // if no then skip the file
@@ -105,7 +105,6 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                     Some(v) => {
                         let v = v.to_string_lossy().to_string();
                         if !extensions_map.contains_key(&v) {
-                            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
                     }
@@ -115,7 +114,6 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                 let doc_id = &model.doc_store.get_id(doc);
                 if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store) {
                     if !expired {
-                        skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         return;
                     }
                 }
@@ -131,12 +129,13 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                                 Err(err) => eprintln!("ERROR: {err}"),
                             }
                             let file_size = doc.metadata().unwrap().len();
-                            total_size.fetch_add(file_size, std::sync::atomic::Ordering::Relaxed);
+                            // do the division here to prevent u64 overflow on large directories
+                            kilobytes
+                                .fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
                             indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
                         Err(err) => {
-                            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let _ = Arc::clone(&cfg.sender)
                                 .lock()
                                 .unwrap()
@@ -147,7 +146,6 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                 }
             }
 
-            skipped_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let _ = cfg
                 .sender
                 .lock()
@@ -159,19 +157,16 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     bar.finish();
     model.lock().unwrap().commit().context("commit model")?;
     println!("Completed Indexing documents...");
+    let indexed_files = indexed_files.load(std::sync::atomic::Ordering::SeqCst);
     println!(
-        "Indexed {} files",
-        indexed_files.load(std::sync::atomic::Ordering::SeqCst)
-    );
-    println!(
-        "Skipped {} files",
-        skipped_files.load(std::sync::atomic::Ordering::SeqCst)
+        "Indexed {} file{}",
+        indexed_files,
+        if indexed_files == 1 { "" } else { "s" }
     );
 
-    println!(
-        "Total files size: {} Mib",
-        total_size.load(std::sync::atomic::Ordering::SeqCst) / 1024 / 1024
-    );
+    let kbs = kilobytes.load(std::sync::atomic::Ordering::SeqCst);
+    let (mbs, kbs) = ((kbs / 1024), (kbs % 1024));
+    println!("Total files size: {} Mbs {} Kbs", mbs, kbs);
 
     Ok(())
 }
@@ -203,8 +198,18 @@ pub fn handle_messages(
     Ok(())
 }
 
-fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+#[allow(clippy::collapsible_else_if)]
+fn read_files_recursively(files_dir: &Path, scan_hidden: bool) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
+
+    let basename = files_dir
+        .file_name()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let hidden = basename.starts_with(".");
+    if hidden && !scan_hidden {
+        return Ok(files);
+    }
 
     if files_dir.is_dir() {
         for entry in fs::read_dir(files_dir)? {
@@ -212,14 +217,21 @@ fn read_files_recursively(files_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
             let path = entry.path();
 
             if path.is_dir() {
-                let mut subdir_files = read_files_recursively(&path)?;
+                let mut subdir_files = read_files_recursively(&path, scan_hidden)?;
                 files.append(&mut subdir_files);
             } else {
                 files.push(path);
             }
         }
     } else {
-        files.push(files_dir.to_path_buf());
+        if let Ok(data) = fs::metadata(files_dir) {
+            let mode = data.permissions().mode();
+            // check execute bits set
+            // (not set && push to files)
+            if mode & 0o111 == 0 {
+                files.push(files_dir.to_path_buf());
+            }
+        }
     }
 
     Ok(files)

@@ -2,7 +2,7 @@
 name = "indexer"
 description = "A search engine for local directories"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "GNU/GPL3"
 
@@ -31,4 +31,4 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-debug = true
+# debug = true
