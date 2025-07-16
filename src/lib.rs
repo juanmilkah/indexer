@@ -112,10 +112,10 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                 }
                 let mut model = model.lock().unwrap();
                 let doc_id = &model.doc_store.get_id(doc);
-                if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store) {
-                    if !expired {
-                        return;
-                    }
+                if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store)
+                    && !expired
+                {
+                    return;
                 }
             }
             if let Some(ext) = doc.extension() {
@@ -166,7 +166,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
 
     let kbs = kilobytes.load(std::sync::atomic::Ordering::SeqCst);
     let (mbs, kbs) = ((kbs / 1024), (kbs % 1024));
-    println!("Total files size: {} Mbs {} Kbs", mbs, kbs);
+    println!("Total files size: {mbs} Mbs {kbs} Kbs");
 
     Ok(())
 }

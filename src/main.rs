@@ -69,7 +69,7 @@ fn get_storage() -> PathBuf {
     index_dir.push(".indexer");
     if !index_dir.exists() {
         fs::create_dir(&index_dir)
-            .map_err(|err| eprintln!("Create .indexer dir: {}", err))
+            .map_err(|err| eprintln!("Create .indexer dir: {err}"))
             .unwrap();
     }
     index_dir
@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
             });
 
             index_documents(&cfg)?;
-            println!("Logs saved to: {:?}", log_file);
+            println!("Logs saved to: {log_file:?}");
         }
         Commands::Search {
             index_directory,
@@ -158,10 +158,10 @@ fn main() -> anyhow::Result<()> {
                 let result = result.join("");
                 fs::write(f, result)?;
             } else {
-                if let Some(count) = result_count {
-                    if result.len() > count {
-                        result.truncate(count);
-                    }
+                if let Some(count) = result_count
+                    && result.len() > count
+                {
+                    result.truncate(count);
                 }
                 result.iter().for_each(|(p, c)| println!("{c}: {p:?}"));
             }

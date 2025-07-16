@@ -1,18 +1,18 @@
-use anyhow::anyhow;
 use anyhow::Context;
+use anyhow::anyhow;
 use html5ever::driver::{self, ParseOpts};
 use lopdf;
 use scraper::{Html, HtmlTreeSink};
 use tendril::TendrilSink;
-use xml::reader::XmlEvent;
 use xml::EventReader;
+use xml::reader::XmlEvent;
 
 use crate::lexer::Lexer;
 
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 
 pub fn parse_csv_document(
     filepath: &Path,

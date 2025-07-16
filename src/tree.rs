@@ -209,16 +209,17 @@ impl MainIndex {
 
         let mut segments = Vec::new();
         for path in paths {
-            if path.is_dir() && path.to_string_lossy().to_string().contains("segment_") {
-                if let Some(prefix) = path.file_stem() {
-                    let name = prefix.to_string_lossy().to_string();
-                    let (_, seg_id) = name.split_once("segment_").unwrap();
-                    let seg_id = seg_id
-                        .to_string()
-                        .parse::<u64>()
-                        .context("parsing segment id")?;
-                    segments.push(seg_id);
-                }
+            if path.is_dir()
+                && path.to_string_lossy().to_string().contains("segment_")
+                && let Some(prefix) = path.file_stem()
+            {
+                let name = prefix.to_string_lossy().to_string();
+                let (_, seg_id) = name.split_once("segment_").unwrap();
+                let seg_id = seg_id
+                    .to_string()
+                    .parse::<u64>()
+                    .context("parsing segment id")?;
+                segments.push(seg_id);
             }
         }
 
