@@ -8,7 +8,7 @@ use clap::Parser;
 
 use indexer::server::run_server;
 
-// use clap args parser instead
+/// Represents the command-line arguments for the Indexer application.
 #[derive(Parser, Debug)]
 #[command(
     name = "Indexer",
@@ -16,11 +16,11 @@ use indexer::server::run_server;
     version = env!("CARGO_PKG_VERSION")
 )]
 struct Args {
-    /// The key functionality commands
+    /// The key functionality commands.
     #[command(subcommand)]
     command: Commands,
 
-    /// Redirect Stderr and Stdout to a file descriptor
+    /// Redirect Stderr and Stdout to a file descriptor.
     #[arg(
         short = 'l',
         long = "log",
@@ -29,23 +29,27 @@ struct Args {
     log_file: Option<PathBuf>,
 }
 
+/// Defines the available subcommands for the Indexer application.
 #[derive(Parser, Debug)]
 enum Commands {
-    /// Build an index for a directory
+    /// Build an index for a directory.
     Index {
+        /// Path to perform action on.
         #[clap(short = 'p', long = "path", help = "Path to perfom action on")]
         path: Option<PathBuf>,
+        /// Path to index files directory.
         #[clap(short = 'o', long = "output", help = "Path to index files directory")]
         output_directory: Option<PathBuf>,
+        /// Index hidden files and directories.
         #[clap(
             short = 'z',
             long = "hidden",
             help = "Index hidden files and directories"
         )]
         hidden: bool,
-        /// Skip paths with specified basename
-        /// To skip `target` directories
-        ///     indexer index --path . --skip-paths target
+        /// Skip paths with specified basename.
+        /// To skip `target` directories:
+        /// `indexer index --path . --skip-paths target`
         #[clap(
             short = 's',
             long = "skip-paths",
@@ -53,26 +57,38 @@ enum Commands {
         )]
         skip_paths: Option<Vec<PathBuf>>,
     },
-    /// Query some search term using the index
+    /// Query some search term using the index.
     Search {
+        /// Path to index files directory.
         #[arg(short = 'i', long = "index", help = "Path to index files directory")]
         index_directory: Option<PathBuf>,
+        /// Query to search.
         #[arg(short = 'q', long = "query", help = "Query to search")]
         query: String,
+        /// Write result to file.
         #[arg(short = 'o', long = "output", help = "Write result to file")]
         output_file: Option<PathBuf>,
+        /// Number of results to return.
         #[arg(short = 'c', long = "count", help = "Number of results")]
         result_count: Option<usize>,
     },
-    /// Serve the search engine via http
+    /// Serve the search engine via HTTP.
     Serve {
+        /// Path to index file.
         #[arg(short = 'i', long = "index", help = "Path to index file")]
         index_directory: Option<PathBuf>,
+        /// Port number to listen on.
         #[arg(short = 'p', long = "port", help = "Port number")]
         port: Option<u16>,
     },
 }
 
+/// Determines and returns the default storage directory for the indexer.
+/// This will typically be `~/.indexer`. If the directory does not exist, it
+/// attempts to create it.
+///
+/// # Returns
+/// A `PathBuf` representing the storage directory.
 fn get_storage() -> PathBuf {
     let mut index_dir = home::home_dir().unwrap_or(Path::new(".").to_path_buf());
     index_dir.push(".indexer");
@@ -84,6 +100,12 @@ fn get_storage() -> PathBuf {
     index_dir
 }
 
+/// The main entry point of the Indexer application.
+/// It parses command-line arguments and dispatches to the appropriate
+/// subcommand logic.
+///
+/// # Returns
+/// `Ok(())` if the operation was successful, otherwise an `anyhow::Result` error.
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let mut log_file = get_storage();
@@ -130,6 +152,8 @@ fn main() -> anyhow::Result<()> {
             };
 
             let err_handler = cfg.error_handler.clone();
+            // Spawns a new thread to handle messages (errors/info) from the
+            // indexing process.
             let logs_handler = thread::spawn(move || {
                 let _ = handle_messages(&receiver, err_handler.clone());
             });

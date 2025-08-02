@@ -1,5 +1,3 @@
-// #![feature(path_file_prefix)]
-
 pub mod html;
 pub mod lexer;
 pub mod parsers;
@@ -23,33 +21,54 @@ use std::{
     time::{self, Duration, SystemTime},
 };
 
+/// Configuration for the indexing process.
 pub struct Config {
-    pub hidden: bool,        /* allow indexing hidden directories and files*/
-    pub filepath: PathBuf,   /* filepath to perform indexing on*/
-    pub index_path: PathBuf, /* path to index directory*/
+    /// Allows indexing of hidden directories and files if `true`.
+    pub hidden: bool,
+    /// The filepath or directory path to perform indexing on.
+    pub filepath: PathBuf,
+    /// The path to the directory where index files will be stored.
+    pub index_path: PathBuf,
+    /// A list of paths to skip during indexing.
     pub skip_paths: Vec<PathBuf>,
-    pub error_handler: ErrorHandler, /* error output stream*/
-    pub sender: Arc<RwLock<mpsc::Sender<Message>>>, /*send errors*/
+    /// The handler for errors and informational messages.
+    pub error_handler: ErrorHandler,
+    /// A sender channel for sending messages (errors, info, debug).
+    pub sender: Arc<RwLock<mpsc::Sender<Message>>>,
 }
 
+/// Defines where error and informational messages should be output.
 #[derive(Clone)]
 pub enum ErrorHandler {
+    /// Messages are printed to `stderr`.
     Stderr,
+    /// Messages are written to the specified file.
     File(PathBuf),
 }
 
-// TODO: Add a comment
+/// Represents different types of messages that can be sent through the message
+/// channel.
 pub enum Message {
-    /// Stop message handling
+    /// Signal to stop message handling.
     Break,
-    /// Error message
+    /// An error message.
     Error(String),
-    /// Good to know info
+    /// An informational message.
     Info(String),
-    /// Debug information
+    /// A debug message.
     Debug(String),
 }
 
+/// Searches the index for a given term. It tokenizes the term,
+/// loads the main index, and performs the search.
+///
+/// # Arguments
+/// * `term` - The search query string.
+/// * `index_file` - The path to the directory containing the index files.
+///
+/// # Returns
+/// A `Result` containing a `Vec` of tuples, where each tuple is a `PathBuf`
+/// of a matching document and its TF-IDF score, or an `anyhow::Error` on failure.
 pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf, f64)>> {
     let text_chars = term.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = lexer::Lexer::new(&text_chars);
@@ -60,11 +79,24 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf
     Ok(results)
 }
 
+/// Type alias for a `HashMap` mapping file extensions (as `String`) to parser functions.
+/// Each parser function takes a `Path`, an `Arc<RwLock<mpsc::Sender<Message>>>`,
+/// and a slice of `String` (stop words), returning an `anyhow::Result<Vec<String>>`.
 type ExtensionToParser = HashMap<
     String,
     fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> anyhow::Result<Vec<String>>,
 >;
 
+/// Indexes documents located at `cfg.filepath`. It reads files recursively
+/// (if it's a directory), parses them based on their extension, tokenizes the
+/// content, and adds them to the index.
+/// The process is parallelized for efficiency.
+///
+/// # Arguments
+/// * `cfg` - A reference to the `Config` containing indexing parameters.
+///
+/// # Returns
+/// `Ok(())` if indexing completes successfully, otherwise an `anyhow::Result` error.
 pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     println!("Indexing documents...");
     let filepath = PathBuf::from(&cfg.filepath);
@@ -196,6 +228,18 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handles messages received from the indexing process, directing them to the
+/// specified error handler.
+/// Messages can be errors, informational, or debug messages.
+///
+/// # Arguments
+/// * `receiver` - The `mpsc::Receiver` to receive messages from.
+/// * `error_handler` - The `ErrorHandler` specifying where messages should be
+///   output.
+///
+/// # Returns
+/// `Ok(())` if message handling completes, or an `anyhow::Result` error if
+/// writing to a file fails.
 pub fn handle_messages(
     receiver: &mpsc::Receiver<Message>,
     error_handler: ErrorHandler,
@@ -231,6 +275,17 @@ pub fn handle_messages(
     Ok(())
 }
 
+/// Recursively reads files from a directory, respecting hidden file settings
+/// and skip paths.
+///
+/// # Arguments
+/// * `files_dir` - The directory to read files from.
+/// * `scan_hidden` - If `true`, hidden files and directories will be included.
+/// * `skip_paths` - A slice of paths to explicitly skip.
+///
+/// # Returns
+/// A `Result` containing a `Vec<PathBuf>` of discovered files, or an
+/// `anyhow::Result` error.
 #[allow(clippy::collapsible_else_if)]
 fn read_files_recursively(
     files_dir: &Path,
@@ -294,6 +349,17 @@ fn read_files_recursively(
     Ok(files)
 }
 
+/// Checks if a document's index entry is expired, meaning the original file
+/// has been modified more recently than it was indexed.
+///
+/// # Arguments
+/// * `doc_id` - The ID of the document to check.
+/// * `doc_store` - A reference to the `DocumentStore` containing document
+///   metadata.
+///
+/// # Returns
+/// `Some(true)` if the index is expired, `Some(false)` if not expired,
+/// and `None` if the document ID is not found in the `doc_store`.
 fn doc_index_is_expired(doc_id: u64, doc_store: &DocumentStore) -> Option<bool> {
     if let Some(doc_info) = doc_store.id_to_doc_info.get(&doc_id) {
         let now = SystemTime::now();

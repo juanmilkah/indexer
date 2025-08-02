@@ -15,6 +15,17 @@ use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, RwLock, mpsc};
 
+/// Parses a CSV document, extracts text content from all fields, tokenizes it,
+/// and removes stop words.
+///
+/// # Arguments
+/// * `filepath` - The path to the CSV file.
+/// * `err_handler` - A sender for logging messages.
+/// * `stop_words` - A slice of stop words to filter out.
+///
+/// # Returns
+/// A `Result` containing a `Vec<String>` of processed tokens on success, or an
+/// `anyhow::Error` on failure.
 pub fn parse_csv_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
@@ -32,7 +43,7 @@ pub fn parse_csv_document(
     let mut fields = String::new();
 
     for record in rdr.records() {
-        // The iterator yieds Result<StringRecord, Error>
+        // The iterator yields Result<StringRecord, Error>
         let record = record.context("check record")?;
         for field in record.iter() {
             fields.push_str(field);
@@ -45,6 +56,17 @@ pub fn parse_csv_document(
     Ok(tokens)
 }
 
+/// Parses an HTML document, extracts all visible text content, tokenizes it,
+/// and removes stop words.
+///
+/// # Arguments
+/// * `filepath` - The path to the HTML file.
+/// * `err_handler` - A sender for logging messages.
+/// * `stop_words` - A slice of stop words to filter out.
+///
+/// # Returns
+/// A `Result` containing a `Vec<String>` of processed tokens on success, or an
+/// `anyhow::Error` on failure.
 pub fn parse_html_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
@@ -74,6 +96,17 @@ pub fn parse_html_document(
     Ok(tokens)
 }
 
+/// Parses an XML document, extracts all character data (text content),
+/// tokenizes it, and removes stop words.
+///
+/// # Arguments
+/// * `filepath` - The path to the XML file.
+/// * `err_handler` - A sender for logging messages.
+/// * `stop_words` - A slice of stop words to filter out.
+///
+/// # Returns
+/// A `Result` containing a `Vec<String>` of processed tokens on success, or an
+/// `anyhow::Error` on failure.
 pub fn parse_xml_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
@@ -112,6 +145,17 @@ pub fn parse_xml_document(
     Ok(tokens)
 }
 
+/// Parses a PDF document, extracts text from all pages, tokenizes it,
+/// and removes stop words.
+///
+/// # Arguments
+/// * `filepath` - The path to the PDF file.
+/// * `err_handler` - A sender for logging messages.
+/// * `stop_words` - A slice of stop words to filter out.
+///
+/// # Returns
+/// A `Result` containing a `Vec<String>` of processed tokens on success, or an
+///  `anyhow::Error` on failure.
 pub fn parse_pdf_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
@@ -141,6 +185,17 @@ pub fn parse_pdf_document(
     Ok(tokens)
 }
 
+/// Parses a plain text document, reads its content, tokenizes it,
+/// and removes stop words.
+///
+/// # Arguments
+/// * `filepath` - The path to the text file.
+/// * `err_handler` - A sender for logging messages.
+/// * `stop_words` - A slice of stop words to filter out.
+///
+/// # Returns
+/// A `Result` containing a `Vec<String>` of processed tokens on success, or an
+/// `anyhow::Error` on failure.
 pub fn parse_txt_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,

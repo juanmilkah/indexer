@@ -8,6 +8,18 @@ use std::sync::{Arc, RwLock};
 use crate::html::HTML_DEFAULT;
 use crate::{Message, search_term};
 
+/// Runs an HTTP server to serve the search engine.
+/// It listens for GET requests on "/" to serve the HTML interface
+/// and POST requests on "/query" to perform searches.
+///
+/// # Arguments
+/// * `index_file` - The path to the directory containing the index files.
+/// * `port` - The port number to bind the server to.
+/// * `err_handler` - An `Arc<RwLock<Sender<Message>>>` for sending error and
+///   info messages.
+///
+/// # Returns
+/// `Ok(())` if the server runs successfully, otherwise an `io::Result` error.
 pub fn run_server(
     index_file: &Path,
     port: u16,

@@ -10,25 +10,39 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+/// Type alias for Document ID.
 type DocId = u64;
+/// Type alias for Term Frequency.
 type TermFrequency = u32;
+/// Type alias for a search Term.
 type Term = String;
 
+/// Stores metadata about documents, mapping paths to IDs and vice-versa.
 #[derive(Serialize, Deserialize, Default)]
 pub struct DocumentStore {
+    /// Maps document paths to their unique IDs.
     pub doc_to_id: HashMap<PathBuf, DocId>,
+    /// Maps document IDs to `DocInfo` containing path and indexed time.
     pub id_to_doc_info: HashMap<DocId, DocInfo>,
+    /// The next available document ID.
     pub next_id: AtomicU64,
-    pub doc_count: u64, // total number of documents added
+    /// Total number of documents added to the store.
+    pub doc_count: u64,
 }
 
+/// Contains information about a document, including its path and the time it
+/// was indexed.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DocInfo {
+    /// The file path of the document.
     pub path: PathBuf,
+    /// The `SystemTime` when the document was indexed.
     pub indexed_at: SystemTime,
 }
 
 impl Default for DocInfo {
+    /// Returns a default `DocInfo` with an empty path and `UNIX_EPOCH` for
+    /// indexed time.
     fn default() -> Self {
         Self {
             path: Default::default(),
@@ -36,7 +50,16 @@ impl Default for DocInfo {
         }
     }
 }
+
 impl DocumentStore {
+    /// Retrieves the unique document ID for a given path. If the path is new,
+    /// it assigns a new ID and stores the document information.
+    ///
+    /// # Arguments
+    /// * `path` - The `Path` of the document.
+    ///
+    /// # Returns
+    /// The `DocId` for the given document path.
     pub fn get_id(&mut self, path: &Path) -> DocId {
         if let Some(id) = self.doc_to_id.get(path) {
             *id
@@ -58,39 +81,68 @@ impl DocumentStore {
         }
     }
 
+    /// Retrieves the `PathBuf` associated with a given `DocId`.
+    ///
+    /// # Arguments
+    /// * `id` - The `DocId` to look up.
+    ///
+    /// # Returns
+    /// An `Option` containing a reference to the `PathBuf` if found, otherwise
+    ///  `None`.
     fn get_path(&self, id: DocId) -> Option<&PathBuf> {
         self.id_to_doc_info.get(&id).map(|info| &info.path)
     }
 
+    /// Returns the total number of documents in the store.
+    ///
+    /// # Returns
+    /// The total count of documents as `u64`.
     fn total_docs(&self) -> u64 {
         self.doc_count
     }
 }
 
+/// Represents a posting in an inverted index, linking a document ID
+/// to the term's frequency within that document.
 #[derive(Serialize, Deserialize)]
 pub struct Posting {
-    pub doc_id: DocId,     // The ID of a document containing the term.
-    pub tf: TermFrequency, // How many times the term appears in that document.
+    /// The ID of a document containing the term.
+    pub doc_id: DocId,
+    /// How many times the term appears in that document.
+    pub tf: TermFrequency,
 }
 
-// Metadata for a term within a specific segment's dictionary
+/// Metadata for a term within a specific segment's dictionary.
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct TermInfo {
-    df: u32,              // how many docs contain this term
-    postings_offset: u64, // byte offset to start position in postings list
-    postings_len: u64,    // number of bytes in postings list
+    /// How many documents contain this term within the segment.
+    df: u32,
+    /// Byte offset to the start position of the postings list for this term in
+    ///  the postings file.
+    postings_offset: u64,
+    /// Number of bytes in the postings list for this term.
+    postings_len: u64,
 }
 
+/// Type alias for a segment's term information, mapping terms to `TermInfo`.
 type SegmentTermInfo = HashMap<Term, TermInfo>;
 
+/// Represents an in-memory segment of the index, holding postings before
+/// flushing to disk.
 #[derive(Default)]
 pub struct InMemorySegment {
-    // Term -> List of postings for docs added to *this segment*
+    /// Maps terms to a list of postings for documents added to *this segment*.
     pub postings: HashMap<Term, Vec<Posting>>,
-    pub doc_count: u64, // Number of docs added to this segment
+    /// Number of documents added to this segment.
+    pub doc_count: u64,
 }
 
 impl InMemorySegment {
+    /// Adds a document and its terms to the in-memory segment.
+    ///
+    /// # Arguments
+    /// * `doc_id` - The ID of the document.
+    /// * `terms` - A slice of terms found in the document.
     fn add_doc(&mut self, doc_id: DocId, terms: &[Term]) {
         self.doc_count += 1;
         let mut term_counts = HashMap::new();
@@ -107,12 +159,30 @@ impl InMemorySegment {
         }
     }
 
-    // should flush to disk
+    /// Determines if the current in-memory segment should be flushed to disk.
+    ///
+    /// # Arguments
+    /// * `max_docs` - The maximum number of documents allowed in this segment
+    ///   before flushing.
+    ///
+    /// # Returns
+    /// `true` if the segment's document count meets or exceeds `max_docs`,
+    /// `false` otherwise.
     fn should_flush(&self, max_docs: u64) -> bool {
         self.doc_count >= max_docs
     }
 }
 
+/// Flushes the contents of an `InMemorySegment` to disk, creating segment files
+/// for the term dictionary and postings lists.
+///
+/// # Arguments
+/// * `segment_id` - The unique ID of the segment being flushed.
+/// * `segment` - A mutable reference to the `InMemorySegment` to flush.
+/// * `index_dir` - The base directory where index segments are stored.
+///
+/// # Returns
+/// `Ok(())` if the flush was successful, otherwise an `anyhow::Result` error.
 fn flush_segment(
     segment_id: u64,
     segment: &mut InMemorySegment,
@@ -176,18 +246,39 @@ fn flush_segment(
     Ok(())
 }
 
+/// Represents the main inverted index, managing document storage, segments,
+/// and search operations.
 pub struct MainIndex {
+    /// The base directory where all index files and segments are stored.
     pub index_dir: PathBuf,
+    /// The store for document metadata.
     pub doc_store: DocumentStore,
-    pub active_segments: Vec<u64>, // by their ids
+    /// A list of active segment IDs.
+    pub active_segments: Vec<u64>,
+    /// The current in-memory segment being built.
     pub current_segment: InMemorySegment,
+    /// The ID for the next segment to be created.
     pub next_segment: u64,
+    /// The maximum number of documents an in-memory segment can hold before
+    /// being flushed.
     pub max_segment_docs: u64,
 }
 
+/// Constant defining the maximum number of documents allowed in an in-memory
+/// segment before flushing.
 const MAX_SEGMENT_DOCS: u64 = 100;
 
 impl MainIndex {
+    /// Creates a new `MainIndex` instance. It loads existing document store
+    /// and segments
+    /// from the `index_dir` if available, or initializes a new index.
+    ///
+    /// # Arguments
+    /// * `index_dir` - The directory where index files are located or will be
+    ///   stored.
+    ///
+    /// # Returns
+    /// `Ok(Self)` if successful, otherwise an `anyhow::Result` error.
     pub fn new(index_dir: &Path) -> anyhow::Result<Self> {
         let docstore_filepath = index_dir.join("docstore.bin");
 
@@ -235,6 +326,17 @@ impl MainIndex {
         })
     }
 
+    /// Adds a document to the index. It tokenizes the document, adds it to the
+    /// current in-memory segment, and flushes the segment to disk if it exceeds
+    /// `max_segment_docs`.
+    ///
+    /// # Arguments
+    /// * `doc_path` - The path to the document to add.
+    /// * `terms` - A slice of terms extracted from the document.
+    ///
+    /// # Returns
+    /// `Ok(())` if the document was added successfully, otherwise an
+    /// `anyhow::Result` error.
     pub fn add_document(&mut self, doc_path: &Path, terms: &[Term]) -> anyhow::Result<()> {
         if terms.is_empty() {
             return Ok(());
@@ -257,7 +359,12 @@ impl MainIndex {
         Ok(())
     }
 
-    // flush the last partially filled segment
+    /// Commits the current state of the index, flushing any partially filled
+    /// in-memory segment to disk and saving the `DocumentStore`.
+    ///
+    /// # Returns
+    /// `Ok(())` if the commit was successful, otherwise an `anyhow::Result`
+    /// error.
     pub fn commit(&mut self) -> anyhow::Result<()> {
         if self.current_segment.doc_count > 0 {
             let seg_id = self.next_segment;
@@ -275,6 +382,17 @@ impl MainIndex {
         Ok(())
     }
 
+    /// Searches the index for documents matching the given query tokens.
+    /// It calculates TF-IDF scores for each matching document across all active
+    /// segments.
+    ///
+    /// # Arguments
+    /// * `q_tokens` - A slice of terms representing the search query.
+    ///
+    /// # Returns
+    /// A `Vec` of tuples, where each tuple contains the `PathBuf` of a matching
+    /// document and its calculated TF-IDF score, sorted in descending order of
+    /// score.
     pub fn search(&self, q_tokens: &[Term]) -> anyhow::Result<Vec<(PathBuf, f64)>> {
         let mut scores: HashMap<DocId, f64> = HashMap::new();
         let total_docs = self.doc_store.total_docs();
@@ -312,6 +430,7 @@ impl MainIndex {
                 continue;
             }
 
+            // Calculate Inverse Document Frequency (IDF)
             let idf = (total_docs as f64 / global_df).ln().abs();
 
             if let Some(postings_hit) = terms_info_cache.get(token) {

@@ -1,5 +1,5 @@
-/// The default HTML template for a simple web page for serving and making requests from the
-/// search engine's on the backend
+/// The default HTML template for a simple web page for serving and making
+/// requests from the search engine's on the backend
 pub const HTML_DEFAULT: &str = r"
 <!doctype html>
 <html>
