@@ -6,32 +6,31 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
 use crate::html::HTML_DEFAULT;
-use crate::search_term;
+use crate::{Message, search_term};
 
 pub fn run_server(
     index_file: &Path,
     port: u16,
-    err_handler: Arc<RwLock<Sender<String>>>,
+    err_handler: Arc<RwLock<Sender<Message>>>,
 ) -> io::Result<()> {
     let port = format!("localhost:{port}");
     let server = match Server::http(&port) {
         Ok(val) => val,
         Err(err) => {
-            let _ = err_handler
-                .read()
-                .unwrap()
-                .send(format!("Failed to bind server to port {port}: {err}"));
+            let _ = err_handler.read().unwrap().send(Message::Error(format!(
+                "Failed to bind server to port {port}: {err}"
+            )));
             return Err(io::Error::new(io::ErrorKind::ConnectionRefused, err));
         }
     };
     println!("Server listening on port {port}");
 
     for mut request in server.incoming_requests() {
-        let _ = err_handler.read().unwrap().send(format!(
+        let _ = err_handler.read().unwrap().send(Message::Info(format!(
             "{method} {url}",
             method = request.method(),
             url = request.url()
-        ));
+        )));
 
         match &request.method() {
             Method::Get => match request.url() {

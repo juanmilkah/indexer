@@ -29,13 +29,25 @@ pub struct Config {
     pub index_path: PathBuf, /* path to index directory*/
     pub skip_paths: Vec<PathBuf>,
     pub error_handler: ErrorHandler, /* error output stream*/
-    pub sender: Arc<RwLock<mpsc::Sender<String>>>, /*send errors*/
+    pub sender: Arc<RwLock<mpsc::Sender<Message>>>, /*send errors*/
 }
 
 #[derive(Clone)]
 pub enum ErrorHandler {
     Stderr,
     File(PathBuf),
+}
+
+// TODO: Add a comment
+pub enum Message {
+    /// Stop message handling
+    Break,
+    /// Error message
+    Error(String),
+    /// Good to know info
+    Info(String),
+    /// Debug information
+    Debug(String),
 }
 
 pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf, f64)>> {
@@ -50,12 +62,16 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf
 
 type ExtensionToParser = HashMap<
     String,
-    fn(&Path, Arc<RwLock<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
+    fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> anyhow::Result<Vec<String>>,
 >;
 
 pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     println!("Indexing documents...");
     let filepath = PathBuf::from(&cfg.filepath);
+    if !filepath.exists() {
+        eprintln!("Provided an invalid filepath");
+        return Ok(());
+    }
     let docs = if filepath.is_dir() {
         let basename = match filepath.file_name() {
             Some(v) => v.to_string_lossy().to_string(),
@@ -147,7 +163,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                         let _ = Arc::clone(&cfg.sender)
                             .read()
                             .unwrap()
-                            .send(format!("Skippped document: {doc:?}: {err}"));
+                            .send(Message::Info(format!("Skippped document: {doc:?}: {err}")));
                         return;
                     }
                 }
@@ -157,7 +173,7 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                 .sender
                 .read()
                 .unwrap()
-                .send(format!("Failed to parse document: {doc:?}"));
+                .send(Message::Info(format!("Failed to parse document: {doc:?}")));
         });
     });
 
@@ -175,36 +191,41 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
     let (mbs, kbs) = ((kbs / 1024), (kbs % 1024));
     println!("Total files size: {mbs} Mbs {kbs} Kbs");
 
+    // Close the message handler
+    let _ = Arc::clone(&cfg.sender).read().unwrap().send(Message::Break);
     Ok(())
 }
 
 pub fn handle_messages(
-    receiver: &mpsc::Receiver<String>,
+    receiver: &mpsc::Receiver<Message>,
     error_handler: ErrorHandler,
 ) -> anyhow::Result<()> {
-    let message = match receiver.recv() {
-        Ok(message) => message,
-        Err(_) => return Ok(()),
-    };
+    while let Ok(message) = receiver.recv() {
+        let now = SystemTime::now()
+            .duration_since(time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-    let now = SystemTime::now()
-        .duration_since(time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        let message = match message {
+            Message::Break => return Ok(()),
+            Message::Error(err) => format!("{now} INFO: {err}"),
+            Message::Info(info) => format!("{now} INFO: {info}"),
+            Message::Debug(deb) => format!("{now} INFO: {deb}"),
+        };
 
-    match error_handler {
-        ErrorHandler::Stderr => {
-            let mut stderr = stderr().lock();
-            let message = format!("{now} {message}");
-            let _ = stderr.write_all(message.as_bytes());
-        }
-        ErrorHandler::File(f) => {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&f)
-                .context("opening log file")?;
-            let _ = writeln!(file, "{now} {message}");
+        match error_handler {
+            ErrorHandler::Stderr => {
+                let mut stderr = stderr().lock();
+                let _ = stderr.write_all(message.to_string().as_bytes());
+            }
+            ErrorHandler::File(ref f) => {
+                let mut file = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(f)
+                    .context("opening log file")?;
+                let _ = writeln!(file, "{message}");
+            }
         }
     }
     Ok(())
@@ -218,9 +239,14 @@ fn read_files_recursively(
 ) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
+    // Skip invalid filepaths
     // Skip hidden files if the scan_hidden flag is not set
     // Skip filepaths and basenames specified in the `skip_paths` list
     // Skip files whose executable bits have been set
+    if !files_dir.exists() {
+        return Ok(files);
+    }
+
     let basename = files_dir
         .file_name()
         .map(|v| v.to_string_lossy().to_string())

@@ -7,6 +7,7 @@ use tendril::TendrilSink;
 use xml::EventReader;
 use xml::reader::XmlEvent;
 
+use crate::Message;
 use crate::lexer::Lexer;
 
 use std::fs::{self, File};
@@ -16,14 +17,14 @@ use std::sync::{Arc, RwLock, mpsc};
 
 pub fn parse_csv_document(
     filepath: &Path,
-    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
             .read()
             .unwrap()
-            .send(format!("Indexing document: {filepath:?}"));
+            .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
     let reader = BufReader::new(File::open(filepath).context("open filepath")?);
     let mut rdr = csv::Reader::from_reader(reader);
@@ -46,14 +47,14 @@ pub fn parse_csv_document(
 
 pub fn parse_html_document(
     filepath: &Path,
-    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
             .read()
             .unwrap()
-            .send(format!("Indexing document: {filepath:?}"));
+            .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
     let document = fs::read_to_string(filepath)?;
     let parser = driver::parse_document(
@@ -75,14 +76,14 @@ pub fn parse_html_document(
 
 pub fn parse_xml_document(
     filepath: &Path,
-    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
             .read()
             .unwrap()
-            .send(format!("Indexing document: {filepath:?}"));
+            .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
 
     let file = File::open(filepath)?;
@@ -99,7 +100,10 @@ pub fn parse_xml_document(
                 tokens.append(&mut lex.get_tokens(stop_words));
             }
             Err(err) => {
-                let _ = err_handler.read().unwrap().send(format!("{err}"));
+                let _ = err_handler
+                    .read()
+                    .unwrap()
+                    .send(Message::Error(format!("{err}")));
                 continue;
             }
             _ => {}
@@ -110,14 +114,14 @@ pub fn parse_xml_document(
 
 pub fn parse_pdf_document(
     filepath: &Path,
-    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
             .read()
             .unwrap()
-            .send(format!("Indexing document: {filepath:?}"));
+            .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
 
     let mut tokens = Vec::new();
@@ -139,14 +143,14 @@ pub fn parse_pdf_document(
 
 pub fn parse_txt_document(
     filepath: &Path,
-    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
             .read()
             .unwrap()
-            .send(format!("Indexing document: {filepath:?}"));
+            .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
     let content = match fs::read_to_string(filepath) {
         Ok(val) => val,
@@ -155,7 +159,7 @@ pub fn parse_txt_document(
                 let _ = err_handler
                     .read()
                     .unwrap()
-                    .send(format!("Failed to read file {filepath:?} : {err}"));
+                    .send(Message::Error(format!("{err}")));
             }
             return Err(anyhow::Error::new(err));
         }

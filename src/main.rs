@@ -130,13 +130,12 @@ fn main() -> anyhow::Result<()> {
             };
 
             let err_handler = cfg.error_handler.clone();
-            thread::spawn(move || {
-                loop {
-                    let _ = handle_messages(&receiver, err_handler.clone());
-                }
+            let logs_handler = thread::spawn(move || {
+                let _ = handle_messages(&receiver, err_handler.clone());
             });
 
             index_documents(&cfg)?;
+            logs_handler.join().unwrap();
             println!("Logs saved to: {log_file:?}");
         }
         Commands::Search {
