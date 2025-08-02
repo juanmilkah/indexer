@@ -12,16 +12,16 @@ use crate::lexer::Lexer;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, RwLock, mpsc};
 
 pub fn parse_csv_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
-            .lock()
+            .read()
             .unwrap()
             .send(format!("Indexing document: {filepath:?}"));
     }
@@ -46,12 +46,12 @@ pub fn parse_csv_document(
 
 pub fn parse_html_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
-            .lock()
+            .read()
             .unwrap()
             .send(format!("Indexing document: {filepath:?}"));
     }
@@ -75,12 +75,12 @@ pub fn parse_html_document(
 
 pub fn parse_xml_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
-            .lock()
+            .read()
             .unwrap()
             .send(format!("Indexing document: {filepath:?}"));
     }
@@ -99,7 +99,7 @@ pub fn parse_xml_document(
                 tokens.append(&mut lex.get_tokens(stop_words));
             }
             Err(err) => {
-                let _ = err_handler.lock().unwrap().send(format!("{err}"));
+                let _ = err_handler.read().unwrap().send(format!("{err}"));
                 continue;
             }
             _ => {}
@@ -110,12 +110,12 @@ pub fn parse_xml_document(
 
 pub fn parse_pdf_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
-            .lock()
+            .read()
             .unwrap()
             .send(format!("Indexing document: {filepath:?}"));
     }
@@ -139,12 +139,12 @@ pub fn parse_pdf_document(
 
 pub fn parse_txt_document(
     filepath: &Path,
-    err_handler: Arc<Mutex<mpsc::Sender<String>>>,
+    err_handler: Arc<RwLock<mpsc::Sender<String>>>,
     stop_words: &[String],
 ) -> anyhow::Result<Vec<String>> {
     {
         let _ = err_handler
-            .lock()
+            .read()
             .unwrap()
             .send(format!("Indexing document: {filepath:?}"));
     }
@@ -153,7 +153,7 @@ pub fn parse_txt_document(
         Err(err) => {
             {
                 let _ = err_handler
-                    .lock()
+                    .read()
                     .unwrap()
                     .send(format!("Failed to read file {filepath:?} : {err}"));
             }

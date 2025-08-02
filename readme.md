@@ -3,7 +3,9 @@
 ![Flamegraph](flamegraph.svg)
 
 A search engine for local directories implemented in Rust.  
-It employs the [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) algorithm for file indexing, [snowball](https://snowballstem.org/) stemming algorithms for token stemming.
+It employs the [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) algorithm
+for file indexing, [snowball](https://snowballstem.org/) stemming algorithms for
+token stemming.
 
 ## Features
 
@@ -28,12 +30,18 @@ index files.
   If path to docs is not provided it falls back to the current directory.  
   Supported file types:  
   (pdf, txt, md, xml, xhtml, html, csv)
+  The indexer by default skips all hidden files and directories unless otherwise
+  specified via the ` -z | --hidden` flag.
+  You can specify more paths to skip during indexing by providing filepaths or 
+  basenames via the `--skip-paths` flag.
 
 ```bash
-indexer index -p [path_to_document]
+indexer index -p [path_to_document] --skip-paths [basename_of_paths_to_skip];
+# to skip all `target` directories
+# indexer index -p . --skip-paths target
 ```
 
-You can also specify a log file via the `log` argument.
+You can also specify a log file via the `log` flag.
 
 ```bash
 indexer --log indexer.log index

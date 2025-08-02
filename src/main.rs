@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow};
 use indexer::{Config, ErrorHandler, handle_messages, index_documents, search_term};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, RwLock, mpsc};
 use std::{fs, thread};
 
 use clap::Parser;
@@ -43,6 +43,15 @@ enum Commands {
             help = "Index hidden files and directories"
         )]
         hidden: bool,
+        /// Skip paths with specified basename
+        /// To skip `target` directories
+        ///     indexer index --path . --skip-paths target
+        #[clap(
+            short = 's',
+            long = "skip-paths",
+            help = "Skip specific entries: directories and files"
+        )]
+        skip_paths: Option<Vec<PathBuf>>,
     },
     /// Query some search term using the index
     Search {
@@ -85,13 +94,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     let (sender, receiver) = mpsc::channel();
-    let sender = Arc::new(Mutex::new(sender));
+    let sender = Arc::new(RwLock::new(sender));
 
     match args.command {
         Commands::Index {
             path,
             output_directory,
             hidden,
+            skip_paths,
         } => {
             let filepath = match path {
                 Some(p) => p,
@@ -116,6 +126,7 @@ fn main() -> anyhow::Result<()> {
                 error_handler,
                 sender,
                 hidden,
+                skip_paths: skip_paths.unwrap_or_default(),
             };
 
             let err_handler = cfg.error_handler.clone();

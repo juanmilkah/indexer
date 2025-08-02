@@ -19,16 +19,17 @@ use std::{
     io::{Write, stderr},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
-    time::{Duration, SystemTime},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicU64, mpsc},
+    time::{self, Duration, SystemTime},
 };
 
 pub struct Config {
-    pub hidden: bool,                /* allow indexing hidden directories and files*/
-    pub filepath: PathBuf,           /* filepath to perform indexing on*/
-    pub index_path: PathBuf,         /* path to index directory*/
+    pub hidden: bool,        /* allow indexing hidden directories and files*/
+    pub filepath: PathBuf,   /* filepath to perform indexing on*/
+    pub index_path: PathBuf, /* path to index directory*/
+    pub skip_paths: Vec<PathBuf>,
     pub error_handler: ErrorHandler, /* error output stream*/
-    pub sender: Arc<Mutex<mpsc::Sender<String>>>, /*send errors*/
+    pub sender: Arc<RwLock<mpsc::Sender<String>>>, /*send errors*/
 }
 
 #[derive(Clone)]
@@ -49,7 +50,7 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf
 
 type ExtensionToParser = HashMap<
     String,
-    fn(&Path, Arc<Mutex<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
+    fn(&Path, Arc<RwLock<mpsc::Sender<String>>>, &[String]) -> anyhow::Result<Vec<String>>,
 >;
 
 pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
@@ -64,7 +65,15 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             eprintln!("Provide the `hidden` flag to index hidden directories");
             return Ok(());
         }
-        read_files_recursively(&filepath, cfg.hidden)?
+
+        if cfg.skip_paths.contains(&filepath)
+            || cfg.skip_paths.contains(&Path::new(&basename).to_path_buf())
+        {
+            eprintln!("Skipping and indexing the same path");
+            return Ok(());
+        }
+
+        read_files_recursively(&filepath, cfg.hidden, &cfg.skip_paths)?
     } else {
         Vec::from([filepath])
     };
@@ -99,17 +108,19 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
             // since the last time is was indexed
             // if yes then reindex the file
             // if no then skip the file
+            let ext = match doc.extension() {
+                Some(v) => {
+                    let v = v.to_string_lossy().to_string();
+                    if !extensions_map.contains_key(&v) {
+                        return;
+                    }
+                    v
+                }
+                None => return,
+            };
+
             let model = Arc::clone(&model);
             {
-                match doc.extension() {
-                    Some(v) => {
-                        let v = v.to_string_lossy().to_string();
-                        if !extensions_map.contains_key(&v) {
-                            return;
-                        }
-                    }
-                    None => return,
-                }
                 let mut model = model.lock().unwrap();
                 let doc_id = &model.doc_store.get_id(doc);
                 if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store)
@@ -118,37 +129,33 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
                     return;
                 }
             }
-            if let Some(ext) = doc.extension() {
-                let ext = ext.to_string_lossy().to_string();
-                if let Some(parser) = extensions_map.get(&ext) {
-                    match parser(doc, err_sender.clone(), &stop_words) {
-                        Ok(tokens) => {
-                            let mut model = model.lock().unwrap();
-                            match model.add_document(doc, &tokens) {
-                                Ok(_) => (),
-                                Err(err) => eprintln!("ERROR: {err}"),
-                            }
-                            let file_size = doc.metadata().unwrap().len();
-                            // do the division here to prevent u64 overflow on large directories
-                            kilobytes
-                                .fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
-                            indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            return;
+
+            if let Some(parser) = extensions_map.get(&ext) {
+                match parser(doc, err_sender.clone(), &stop_words) {
+                    Ok(tokens) => {
+                        let file_size = doc.metadata().unwrap().len();
+                        // do the division here to prevent u64 overflow on large directories
+                        kilobytes.fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
+                        indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                        if let Err(err) = model.lock().unwrap().add_document(doc, &tokens) {
+                            eprintln!("ERROR: {err}");
                         }
-                        Err(err) => {
-                            let _ = Arc::clone(&cfg.sender)
-                                .lock()
-                                .unwrap()
-                                .send(format!("Skippped document: {doc:?}: {err}"));
-                            return;
-                        }
+                        return;
+                    }
+                    Err(err) => {
+                        let _ = Arc::clone(&cfg.sender)
+                            .read()
+                            .unwrap()
+                            .send(format!("Skippped document: {doc:?}: {err}"));
+                        return;
                     }
                 }
             }
 
             let _ = cfg
                 .sender
-                .lock()
+                .read()
                 .unwrap()
                 .send(format!("Failed to parse document: {doc:?}"));
         });
@@ -180,10 +187,16 @@ pub fn handle_messages(
         Err(_) => return Ok(()),
     };
 
+    let now = SystemTime::now()
+        .duration_since(time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
     match error_handler {
         ErrorHandler::Stderr => {
             let mut stderr = stderr().lock();
-            let _ = stderr.write(message.as_bytes());
+            let message = format!("{now} {message}");
+            let _ = stderr.write_all(message.as_bytes());
         }
         ErrorHandler::File(f) => {
             let mut file = fs::OpenOptions::new()
@@ -191,23 +204,31 @@ pub fn handle_messages(
                 .append(true)
                 .open(&f)
                 .context("opening log file")?;
-
-            let _ = writeln!(file, "{message}");
+            let _ = writeln!(file, "{now} {message}");
         }
     }
     Ok(())
 }
 
 #[allow(clippy::collapsible_else_if)]
-fn read_files_recursively(files_dir: &Path, scan_hidden: bool) -> anyhow::Result<Vec<PathBuf>> {
+fn read_files_recursively(
+    files_dir: &Path,
+    scan_hidden: bool,
+    skip_paths: &[PathBuf],
+) -> anyhow::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
+    // Skip hidden files if the scan_hidden flag is not set
+    // Skip filepaths and basenames specified in the `skip_paths` list
+    // Skip files whose executable bits have been set
     let basename = files_dir
         .file_name()
         .map(|v| v.to_string_lossy().to_string())
         .unwrap_or_default();
-    let hidden = basename.starts_with(".");
-    if hidden && !scan_hidden {
+    if (basename.starts_with(".") && !scan_hidden)
+        || skip_paths.contains(&files_dir.to_path_buf())
+        || skip_paths.contains(&Path::new(&basename).to_path_buf())
+    {
         return Ok(files);
     }
 
@@ -216,8 +237,18 @@ fn read_files_recursively(files_dir: &Path, scan_hidden: bool) -> anyhow::Result
             let entry = entry?;
             let path = entry.path();
 
+            let basename = path
+                .file_name()
+                .map(|v| v.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if (basename.starts_with(".") && !scan_hidden)
+                || skip_paths.contains(&path.to_path_buf())
+                || skip_paths.contains(&Path::new(&basename).to_path_buf())
+            {
+                continue;
+            }
             if path.is_dir() {
-                let mut subdir_files = read_files_recursively(&path, scan_hidden)?;
+                let mut subdir_files = read_files_recursively(&path, scan_hidden, skip_paths)?;
                 files.append(&mut subdir_files);
             } else {
                 files.push(path);

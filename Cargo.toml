@@ -11,6 +11,7 @@ anyhow = "1.0.97"
 bincode2 = "2.0.1"
 clap = { version = "4.5.30", features = ["derive"] }
 csv = "1.3.1"
+# flate2 = "1.1.2"
 home = "0.5.11"
 html5ever = "0.29.1"
 indicatif = "0.17.11"
@@ -27,7 +28,7 @@ xml = "0.8.20"
 # Optimizations heavily borrow from this blog
 # https://deterministic.space/high-performance-rust.html
 [profile.release]
-lto = "fat"
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
