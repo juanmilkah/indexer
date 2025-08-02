@@ -25,16 +25,16 @@ use std::{
 pub struct Config {
     /// Allows indexing of hidden directories and files if `true`.
     pub hidden: bool,
+    /// The handler for errors and informational messages.
+    pub error_handler: ErrorHandler,
     /// The filepath or directory path to perform indexing on.
     pub filepath: PathBuf,
     /// The path to the directory where index files will be stored.
     pub index_path: PathBuf,
-    /// A list of paths to skip during indexing.
-    pub skip_paths: Vec<PathBuf>,
-    /// The handler for errors and informational messages.
-    pub error_handler: ErrorHandler,
     /// A sender channel for sending messages (errors, info, debug).
     pub sender: Arc<RwLock<mpsc::Sender<Message>>>,
+    /// A list of paths to skip during indexing.
+    pub skip_paths: Vec<PathBuf>,
 }
 
 /// Defines where error and informational messages should be output.

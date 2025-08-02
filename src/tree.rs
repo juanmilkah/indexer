@@ -20,24 +20,24 @@ type Term = String;
 /// Stores metadata about documents, mapping paths to IDs and vice-versa.
 #[derive(Serialize, Deserialize, Default)]
 pub struct DocumentStore {
+    /// Total number of documents added to the store.
+    pub doc_count: u64,
+    /// The next available document ID.
+    pub next_id: AtomicU64,
     /// Maps document paths to their unique IDs.
     pub doc_to_id: HashMap<PathBuf, DocId>,
     /// Maps document IDs to `DocInfo` containing path and indexed time.
     pub id_to_doc_info: HashMap<DocId, DocInfo>,
-    /// The next available document ID.
-    pub next_id: AtomicU64,
-    /// Total number of documents added to the store.
-    pub doc_count: u64,
 }
 
 /// Contains information about a document, including its path and the time it
 /// was indexed.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DocInfo {
-    /// The file path of the document.
-    pub path: PathBuf,
     /// The `SystemTime` when the document was indexed.
     pub indexed_at: SystemTime,
+    /// The file path of the document.
+    pub path: PathBuf,
 }
 
 impl Default for DocInfo {
@@ -131,10 +131,10 @@ type SegmentTermInfo = HashMap<Term, TermInfo>;
 /// flushing to disk.
 #[derive(Default)]
 pub struct InMemorySegment {
-    /// Maps terms to a list of postings for documents added to *this segment*.
-    pub postings: HashMap<Term, Vec<Posting>>,
     /// Number of documents added to this segment.
     pub doc_count: u64,
+    /// Maps terms to a list of postings for documents added to *this segment*.
+    pub postings: HashMap<Term, Vec<Posting>>,
 }
 
 impl InMemorySegment {
@@ -249,19 +249,19 @@ fn flush_segment(
 /// Represents the main inverted index, managing document storage, segments,
 /// and search operations.
 pub struct MainIndex {
-    /// The base directory where all index files and segments are stored.
-    pub index_dir: PathBuf,
-    /// The store for document metadata.
-    pub doc_store: DocumentStore,
-    /// A list of active segment IDs.
-    pub active_segments: Vec<u64>,
-    /// The current in-memory segment being built.
-    pub current_segment: InMemorySegment,
     /// The ID for the next segment to be created.
     pub next_segment: u64,
     /// The maximum number of documents an in-memory segment can hold before
     /// being flushed.
     pub max_segment_docs: u64,
+    /// The base directory where all index files and segments are stored.
+    pub index_dir: PathBuf,
+    /// A list of active segment IDs.
+    pub active_segments: Vec<u64>,
+    /// The store for document metadata.
+    pub doc_store: DocumentStore,
+    /// The current in-memory segment being built.
+    pub current_segment: InMemorySegment,
 }
 
 /// Constant defining the maximum number of documents allowed in an in-memory
