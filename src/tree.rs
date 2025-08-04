@@ -282,16 +282,8 @@ impl MainIndex {
     pub fn new(index_dir: &Path) -> anyhow::Result<Self> {
         let docstore_filepath = index_dir.join("docstore.bin");
 
-        let doc_store: DocumentStore = {
-            match File::open(docstore_filepath) {
-                Ok(f) => {
-                    let mut reader = BufReader::new(f);
-
-                    bincode2::deserialize_from(&mut reader).unwrap_or_default()
-                }
-                Err(_) => DocumentStore::default(),
-            }
-        };
+        let buf = fs::read(&docstore_filepath).unwrap_or_default();
+        let doc_store = bincode2::deserialize(&buf).unwrap_or_default();
 
         let paths: Vec<PathBuf> = match fs::read_dir(index_dir) {
             Ok(values) => values.map(|e| e.unwrap().path().to_path_buf()).collect(),
