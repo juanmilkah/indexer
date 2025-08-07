@@ -5,6 +5,8 @@ version = "0.2.0"
 edition = "2024"
 authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "GNU/GPL3"
+repository = "https://github.com/juanmilkah/indexer"
+readme = "readme.md"
 
 [dependencies]
 anyhow = "1.0.97"
