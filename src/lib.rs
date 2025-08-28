@@ -17,7 +17,7 @@ use std::{
     io::{Write, stderr},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock, atomic::AtomicU64, mpsc},
+    sync::{Arc, RwLock, atomic::AtomicU64, mpsc},
     time::{self, Duration, SystemTime},
 };
 
@@ -59,6 +59,28 @@ pub enum Message {
     Debug(String),
 }
 
+/// Type alias for a `HashMap` mapping file extensions (as `String`) to parser functions.
+/// Each parser function takes a `Path`, an `Arc<RwLock<mpsc::Sender<Message>>>`,
+/// and a slice of `String` (stop words), returning an `anyhow::Result<Vec<String>>`.
+type ExtensionToParser = HashMap<
+    String,
+    fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> anyhow::Result<Vec<String>>,
+>;
+
+fn get_extensions_map() -> ExtensionToParser {
+    let mut extensions_map: ExtensionToParser = HashMap::new();
+
+    extensions_map.insert("csv".to_string(), parse_csv_document);
+    extensions_map.insert("html".to_string(), parse_html_document);
+    extensions_map.insert("pdf".to_string(), parse_pdf_document);
+    extensions_map.insert("xml".to_string(), parse_xml_document);
+    extensions_map.insert("xhtml".to_string(), parse_xml_document);
+    extensions_map.insert("txt".to_string(), parse_txt_document);
+    extensions_map.insert("md".to_string(), parse_txt_document);
+    extensions_map.shrink_to_fit();
+    extensions_map
+}
+
 /// Searches the index for a given term. It tokenizes the term,
 /// loads the main index, and performs the search.
 ///
@@ -79,13 +101,192 @@ pub fn search_term(term: &str, index_file: &Path) -> anyhow::Result<Vec<(PathBuf
     Ok(results)
 }
 
-/// Type alias for a `HashMap` mapping file extensions (as `String`) to parser functions.
-/// Each parser function takes a `Path`, an `Arc<RwLock<mpsc::Sender<Message>>>`,
-/// and a slice of `String` (stop words), returning an `anyhow::Result<Vec<String>>`.
-type ExtensionToParser = HashMap<
-    String,
-    fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> anyhow::Result<Vec<String>>,
->;
+fn get_docs(
+    filepath: PathBuf,
+    handle_hidden: bool,
+    skip_paths: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
+    if filepath.is_dir() {
+        let basename = match filepath.file_name() {
+            Some(v) => v.to_string_lossy().to_string(),
+            None => "".to_string(),
+        };
+        if basename.starts_with(".") && !handle_hidden {
+            return Err("Provide the `hidden` flag to index hidden directories".to_string());
+        }
+
+        if skip_paths.contains(&filepath)
+            || skip_paths.contains(&Path::new(&basename).to_path_buf())
+        {
+            return Err("Skipping and indexing the same path".to_string());
+        }
+
+        read_files_recursively(&filepath, handle_hidden, skip_paths)
+    } else {
+        Ok(Vec::from([filepath]))
+    }
+}
+
+/// Recursively reads files from a directory, respecting hidden file settings
+/// and skip paths.
+///
+/// # Arguments
+/// * `files_dir` - The directory to read files from.
+/// * `scan_hidden` - If `true`, hidden files and directories will be included.
+/// * `skip_paths` - A slice of paths to explicitly skip.
+///
+/// # Returns
+/// A `Result` containing a `Vec<PathBuf>` of discovered files, or an
+/// `anyhow::Result` error.
+fn read_files_recursively(
+    files_dir: &Path,
+    scan_hidden: bool,
+    skip_paths: &[PathBuf],
+) -> anyhow::Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+
+    // Skip invalid filepaths
+    // Skip hidden files if the scan_hidden flag is not set
+    // Skip filepaths and basenames specified in the `skip_paths` list
+    // Skip files whose executable bits have been set
+    if !files_dir.exists() {
+        return Ok(files);
+    }
+
+    let basename = files_dir
+        .file_name()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if (basename.starts_with(".") && !scan_hidden)
+        || skip_paths.contains(&files_dir.to_path_buf())
+        || skip_paths.contains(&Path::new(&basename).to_path_buf())
+    {
+        return Ok(files);
+    }
+
+    if files_dir.is_dir() {
+        for entry in fs::read_dir(files_dir).map_err(|err| err.to_string())? {
+            let entry = entry.map_err(|err| err.to_string())?;
+            let path = entry.path();
+
+            let basename = path
+                .file_name()
+                .map(|v| v.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if (basename.starts_with(".") && !scan_hidden)
+                || skip_paths.contains(&path.to_path_buf())
+                || skip_paths.contains(&Path::new(&basename).to_path_buf())
+            {
+                continue;
+            }
+            if path.is_dir() {
+                let mut subdir_files = read_files_recursively(&path, scan_hidden, skip_paths)?;
+                files.append(&mut subdir_files);
+            } else {
+                files.push(path);
+            }
+        }
+    } else if let Ok(data) = fs::metadata(files_dir) {
+        let mode = data.permissions().mode();
+        // check execute bits set
+        // (not set && push to files)
+        if mode & 0o111 == 0 {
+            files.push(files_dir.to_path_buf());
+        }
+    }
+
+    Ok(files)
+}
+
+/// Checks if a document's index entry is expired, meaning the original file
+/// has been modified more recently than it was indexed.
+///
+/// # Arguments
+/// * `doc_id` - The ID of the document to check.
+/// * `doc_store` - A reference to the `DocumentStore` containing document
+///   metadata.
+///
+/// # Returns
+/// `Some(true)` if the index is expired, `Some(false)` if not expired,
+/// and `None` if the document ID is not found in the `doc_store`.
+fn doc_index_is_expired(doc_id: u64, doc_store: &DocumentStore) -> bool {
+    if let Some(doc_info) = doc_store.id_to_doc_info.get(&doc_id) {
+        let now = SystemTime::now();
+        let modified_at = Path::new(&doc_info.path)
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap();
+        let elapsed_since_modified = now.duration_since(modified_at).unwrap();
+        let elapsed_since_indexed = now.duration_since(doc_info.indexed_at).unwrap();
+
+        return elapsed_since_indexed > elapsed_since_modified;
+    };
+    true
+}
+
+fn process_doc(
+    doc: &PathBuf,
+    model: Arc<RwLock<MainIndex>>,
+    err_sender: Arc<RwLock<mpsc::Sender<Message>>>,
+    indexed_files: Arc<AtomicU64>,
+    kilobytes: Arc<AtomicU64>,
+    stop_words: &[String],
+) {
+    // check if document index exists in the doc_store;
+    // if it exists, check whether the file has been modified
+    // since the last time is was indexed
+    // if yes then reindex the file
+    // if no then skip the file
+    let extensions_map = get_extensions_map();
+    let ext = match doc.extension() {
+        Some(v) => {
+            let v = v.to_string_lossy().to_string();
+            if !extensions_map.contains_key(&v) {
+                return;
+            }
+            v
+        }
+        None => return,
+    };
+
+    {
+        let doc_id = model.write().unwrap().doc_store.get_id(doc);
+        if !doc_index_is_expired(doc_id, &model.read().unwrap().doc_store) {
+            return;
+        }
+    }
+
+    if let Some(parser) = extensions_map.get(&ext) {
+        match parser(doc, Arc::clone(&err_sender), stop_words) {
+            Ok(tokens) => {
+                let file_size = doc.metadata().unwrap().len();
+                // do the division here to prevent u64 overflow on large directories
+                kilobytes.fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
+                indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                if let Err(err) = model.write().unwrap().add_document(doc, &tokens) {
+                    let _ = err_sender.read().unwrap().send(Message::Error(format!(
+                        "Error adding document to model: {err}"
+                    )));
+                }
+                return;
+            }
+            Err(err) => {
+                let _ = err_sender
+                    .read()
+                    .unwrap()
+                    .send(Message::Info(format!("Skippped document: {doc:?}: {err}")));
+                return;
+            }
+        }
+    }
+
+    let _ = err_sender
+        .read()
+        .unwrap()
+        .send(Message::Error(format!("Failed to parse document: {doc:?}")));
+}
 
 /// Indexes documents located at `cfg.filepath`. It reads files recursively
 /// (if it's a directory), parses them based on their extension, tokenizes the
@@ -104,113 +305,34 @@ pub fn index_documents(cfg: &Config) -> anyhow::Result<()> {
         eprintln!("Provided an invalid filepath");
         return Ok(());
     }
-    let docs = if filepath.is_dir() {
-        let basename = match filepath.file_name() {
-            Some(v) => v.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
-        if basename.starts_with(".") && !cfg.hidden {
-            eprintln!("Provide the `hidden` flag to index hidden directories");
-            return Ok(());
-        }
+    let docs =
+        get_docs(filepath, cfg.hidden, &cfg.skip_paths).map_err(|err| anyhow::anyhow!(err))?;
 
-        if cfg.skip_paths.contains(&filepath)
-            || cfg.skip_paths.contains(&Path::new(&basename).to_path_buf())
-        {
-            eprintln!("Skipping and indexing the same path");
-            return Ok(());
-        }
-
-        read_files_recursively(&filepath, cfg.hidden, &cfg.skip_paths)?
-    } else {
-        Vec::from([filepath])
-    };
     let bar = ProgressBar::new_spinner();
     bar.enable_steady_tick(Duration::from_millis(100));
 
-    let mut extensions_map: ExtensionToParser = HashMap::new();
-
-    extensions_map.insert("csv".to_string(), parse_csv_document);
-    extensions_map.insert("html".to_string(), parse_html_document);
-    extensions_map.insert("pdf".to_string(), parse_pdf_document);
-    extensions_map.insert("xml".to_string(), parse_xml_document);
-    extensions_map.insert("xhtml".to_string(), parse_xml_document);
-    extensions_map.insert("txt".to_string(), parse_txt_document);
-    extensions_map.insert("md".to_string(), parse_txt_document);
-    extensions_map.shrink_to_fit();
-
     // process the documents in parallel
-    let model = Arc::new(Mutex::new(
+    let model = Arc::new(RwLock::new(
         MainIndex::new(&cfg.index_path).context("new main index")?,
     ));
-    let indexed_files = AtomicU64::new(0);
+    let indexed_files = Arc::new(AtomicU64::new(0));
     let stop_words = stop_words::get(LANGUAGE::English);
     let err_sender = Arc::clone(&cfg.sender);
-    let kilobytes = AtomicU64::new(0);
+    let kilobytes = Arc::new(AtomicU64::new(0));
 
-    let chunk_size = 100;
-    docs.chunks(chunk_size).for_each(|chunk| {
-        chunk.par_iter().for_each(|doc| {
-            // check if document index exists in the doc_store;
-            // if it exists, check whether the file has been modified
-            // since the last time is was indexed
-            // if yes then reindex the file
-            // if no then skip the file
-            let ext = match doc.extension() {
-                Some(v) => {
-                    let v = v.to_string_lossy().to_string();
-                    if !extensions_map.contains_key(&v) {
-                        return;
-                    }
-                    v
-                }
-                None => return,
-            };
-
-            let model = Arc::clone(&model);
-            {
-                let mut model = model.lock().unwrap();
-                let doc_id = &model.doc_store.get_id(doc);
-                if let Some(expired) = doc_index_is_expired(*doc_id, &model.doc_store)
-                    && !expired
-                {
-                    return;
-                }
-            }
-
-            if let Some(parser) = extensions_map.get(&ext) {
-                match parser(doc, err_sender.clone(), &stop_words) {
-                    Ok(tokens) => {
-                        let file_size = doc.metadata().unwrap().len();
-                        // do the division here to prevent u64 overflow on large directories
-                        kilobytes.fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
-                        indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                        if let Err(err) = model.lock().unwrap().add_document(doc, &tokens) {
-                            eprintln!("ERROR: {err}");
-                        }
-                        return;
-                    }
-                    Err(err) => {
-                        let _ = Arc::clone(&cfg.sender)
-                            .read()
-                            .unwrap()
-                            .send(Message::Info(format!("Skippped document: {doc:?}: {err}")));
-                        return;
-                    }
-                }
-            }
-
-            let _ = cfg
-                .sender
-                .read()
-                .unwrap()
-                .send(Message::Info(format!("Failed to parse document: {doc:?}")));
-        });
+    docs.par_iter().for_each(|doc| {
+        process_doc(
+            doc,
+            Arc::clone(&model),
+            Arc::clone(&err_sender),
+            Arc::clone(&indexed_files),
+            Arc::clone(&kilobytes),
+            &stop_words,
+        );
     });
 
     bar.finish();
-    model.lock().unwrap().commit().context("commit model")?;
+    model.write().unwrap().commit().context("commit model")?;
     println!("Completed Indexing documents...");
     let indexed_files = indexed_files.load(std::sync::atomic::Ordering::SeqCst);
     println!(
@@ -273,105 +395,4 @@ pub fn handle_messages(
         }
     }
     Ok(())
-}
-
-/// Recursively reads files from a directory, respecting hidden file settings
-/// and skip paths.
-///
-/// # Arguments
-/// * `files_dir` - The directory to read files from.
-/// * `scan_hidden` - If `true`, hidden files and directories will be included.
-/// * `skip_paths` - A slice of paths to explicitly skip.
-///
-/// # Returns
-/// A `Result` containing a `Vec<PathBuf>` of discovered files, or an
-/// `anyhow::Result` error.
-#[allow(clippy::collapsible_else_if)]
-fn read_files_recursively(
-    files_dir: &Path,
-    scan_hidden: bool,
-    skip_paths: &[PathBuf],
-) -> anyhow::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    // Skip invalid filepaths
-    // Skip hidden files if the scan_hidden flag is not set
-    // Skip filepaths and basenames specified in the `skip_paths` list
-    // Skip files whose executable bits have been set
-    if !files_dir.exists() {
-        return Ok(files);
-    }
-
-    let basename = files_dir
-        .file_name()
-        .map(|v| v.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if (basename.starts_with(".") && !scan_hidden)
-        || skip_paths.contains(&files_dir.to_path_buf())
-        || skip_paths.contains(&Path::new(&basename).to_path_buf())
-    {
-        return Ok(files);
-    }
-
-    if files_dir.is_dir() {
-        for entry in fs::read_dir(files_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            let basename = path
-                .file_name()
-                .map(|v| v.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if (basename.starts_with(".") && !scan_hidden)
-                || skip_paths.contains(&path.to_path_buf())
-                || skip_paths.contains(&Path::new(&basename).to_path_buf())
-            {
-                continue;
-            }
-            if path.is_dir() {
-                let mut subdir_files = read_files_recursively(&path, scan_hidden, skip_paths)?;
-                files.append(&mut subdir_files);
-            } else {
-                files.push(path);
-            }
-        }
-    } else {
-        if let Ok(data) = fs::metadata(files_dir) {
-            let mode = data.permissions().mode();
-            // check execute bits set
-            // (not set && push to files)
-            if mode & 0o111 == 0 {
-                files.push(files_dir.to_path_buf());
-            }
-        }
-    }
-
-    Ok(files)
-}
-
-/// Checks if a document's index entry is expired, meaning the original file
-/// has been modified more recently than it was indexed.
-///
-/// # Arguments
-/// * `doc_id` - The ID of the document to check.
-/// * `doc_store` - A reference to the `DocumentStore` containing document
-///   metadata.
-///
-/// # Returns
-/// `Some(true)` if the index is expired, `Some(false)` if not expired,
-/// and `None` if the document ID is not found in the `doc_store`.
-fn doc_index_is_expired(doc_id: u64, doc_store: &DocumentStore) -> Option<bool> {
-    if let Some(doc_info) = doc_store.id_to_doc_info.get(&doc_id) {
-        let now = SystemTime::now();
-        let modified_at = Path::new(&doc_info.path)
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap();
-        let elapsed_since_modified = now.duration_since(modified_at).unwrap();
-        let elapsed_since_indexed = now.duration_since(doc_info.indexed_at).unwrap();
-
-        return Some(elapsed_since_indexed > elapsed_since_modified);
-    };
-    None
 }

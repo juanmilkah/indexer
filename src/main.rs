@@ -181,6 +181,12 @@ fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
 
+            if let Some(count) = result_count
+                && result.len() > count
+            {
+                result.truncate(count);
+            }
+
             if let Some(ref f) = output_file {
                 let result = result
                     .iter()
@@ -192,11 +198,6 @@ fn main() -> anyhow::Result<()> {
                 let result = result.join("");
                 fs::write(f, result)?;
             } else {
-                if let Some(count) = result_count
-                    && result.len() > count
-                {
-                    result.truncate(count);
-                }
                 result.iter().for_each(|(p, c)| println!("{c}: {p:?}"));
             }
         }
