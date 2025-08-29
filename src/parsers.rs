@@ -1,5 +1,4 @@
 use anyhow::Context;
-use anyhow::anyhow;
 use html5ever::driver::{self, ParseOpts};
 use lopdf;
 use scraper::{Html, HtmlTreeSink};
@@ -30,21 +29,35 @@ pub fn parse_csv_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Vec<String> {
     {
         let _ = err_handler
             .read()
             .unwrap()
             .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
-    let reader = BufReader::new(File::open(filepath).context("open filepath")?);
+
+    let f = match File::open(filepath).context("open filepath") {
+        Ok(f) => f,
+        Err(err) => {
+            let _ = err_handler
+                .read()
+                .unwrap()
+                .send(Message::Error(format!("{err}")));
+            return Vec::new();
+        }
+    };
+    let reader = BufReader::new(f);
     let mut rdr = csv::Reader::from_reader(reader);
 
     let mut fields = String::new();
 
     for record in rdr.records() {
         // The iterator yields Result<StringRecord, Error>
-        let record = record.context("check record")?;
+        let record = match record {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
         for field in record.iter() {
             fields.push_str(field);
         }
@@ -53,7 +66,7 @@ pub fn parse_csv_document(
     let fields_chars = fields.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&fields_chars);
     let tokens = lex.get_tokens(stop_words);
-    Ok(tokens)
+    tokens
 }
 
 /// Parses an HTML document, extracts all visible text content, tokenizes it,
@@ -71,29 +84,34 @@ pub fn parse_html_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Vec<String> {
     {
         let _ = err_handler
             .read()
             .unwrap()
             .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
-    let document = fs::read_to_string(filepath)?;
+    let document = match fs::read_to_string(filepath) {
+        Ok(c) => c,
+        Err(err) => {
+            let _ = err_handler
+                .read()
+                .unwrap()
+                .send(Message::Error(format!("{err}")));
+            return Vec::new();
+        }
+    };
     let parser = driver::parse_document(
         HtmlTreeSink::new(Html::new_document()),
         ParseOpts::default(),
     );
     let html = parser.one(document);
-    let root = html.root_element().text();
-    let mut text = String::new();
-    for node in root {
-        text.push_str(node);
-        text.push(' ');
-    }
+    let text = html.html();
+
     let text_chars = text.trim().to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&text_chars);
     let tokens = lex.get_tokens(stop_words);
-    Ok(tokens)
+    tokens
 }
 
 /// Parses an XML document, extracts all character data (text content),
@@ -111,7 +129,7 @@ pub fn parse_xml_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Vec<String> {
     {
         let _ = err_handler
             .read()
@@ -119,7 +137,16 @@ pub fn parse_xml_document(
             .send(Message::Info(format!("Indexing document: {filepath:?}")));
     }
 
-    let file = File::open(filepath)?;
+    let file = match File::open(filepath) {
+        Ok(f) => f,
+        Err(err) => {
+            let _ = err_handler
+                .read()
+                .unwrap()
+                .send(Message::Error(format!("{err}")));
+            return Vec::new();
+        }
+    };
     let file = BufReader::new(file);
 
     let parser = EventReader::new(file);
@@ -142,7 +169,7 @@ pub fn parse_xml_document(
             _ => {}
         }
     }
-    Ok(tokens)
+    tokens
 }
 
 /// Parses a PDF document, extracts text from all pages, tokenizes it,
@@ -160,7 +187,7 @@ pub fn parse_pdf_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Vec<String> {
     {
         let _ = err_handler
             .read()
@@ -171,7 +198,13 @@ pub fn parse_pdf_document(
     let mut tokens = Vec::new();
     let doc = match lopdf::Document::load(filepath) {
         Ok(doc) => doc,
-        Err(err) => return Err(anyhow!(err)),
+        Err(err) => {
+            let _ = err_handler
+                .read()
+                .unwrap()
+                .send(Message::Error(format!("{err}")));
+            return Vec::new();
+        }
     };
 
     for (page_num, _) in doc.get_pages() {
@@ -182,7 +215,7 @@ pub fn parse_pdf_document(
         }
     }
 
-    Ok(tokens)
+    tokens
 }
 
 /// Parses a plain text document, reads its content, tokenizes it,
@@ -200,7 +233,7 @@ pub fn parse_txt_document(
     filepath: &Path,
     err_handler: Arc<RwLock<mpsc::Sender<Message>>>,
     stop_words: &[String],
-) -> anyhow::Result<Vec<String>> {
+) -> Vec<String> {
     {
         let _ = err_handler
             .read()
@@ -210,18 +243,16 @@ pub fn parse_txt_document(
     let content = match fs::read_to_string(filepath) {
         Ok(val) => val,
         Err(err) => {
-            {
-                let _ = err_handler
-                    .read()
-                    .unwrap()
-                    .send(Message::Error(format!("{err}")));
-            }
-            return Err(anyhow::Error::new(err));
+            let _ = err_handler
+                .read()
+                .unwrap()
+                .send(Message::Error(format!("{err}")));
+            return Vec::new();
         }
     };
 
     let content = content.to_lowercase().chars().collect::<Vec<char>>();
     let mut lex = Lexer::new(&content);
     let tokens = lex.get_tokens(stop_words);
-    Ok(tokens)
+    tokens
 }

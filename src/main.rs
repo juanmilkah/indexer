@@ -21,12 +21,17 @@ struct Args {
     command: Commands,
 
     /// Redirect Stderr and Stdout to a file descriptor.
+    /// This is the default behaviour unless `stdout` flag specified
     #[arg(
         short = 'l',
         long = "log",
         help = "Redirect Stderr and Stdout to a file"
     )]
     log_file: Option<PathBuf>,
+
+    /// Display logs in the stdout
+    #[arg(short = 's', long = "stdout", help = "Display logs to the stdout")]
+    stdout: bool,
 }
 
 /// Defines the available subcommands for the Indexer application.
@@ -108,13 +113,20 @@ fn get_storage() -> PathBuf {
 /// `Ok(())` if the operation was successful, otherwise an `anyhow::Result` error.
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let mut log_file = get_storage();
-    log_file.push("logs");
-    let error_handler = match args.log_file {
-        Some(file) => ErrorHandler::File(file),
-        None => ErrorHandler::File(log_file.clone()),
+
+    let error_handler = if args.stdout {
+        ErrorHandler::Stderr
+    } else {
+        let mut log_file = get_storage();
+        log_file.push("logs");
+        println!("Logs saved to: {log_file:?}");
+        match args.log_file {
+            Some(file) => ErrorHandler::File(file),
+            None => ErrorHandler::File(log_file.clone()),
+        }
     };
 
+    // Error messages channel
     let (sender, receiver) = mpsc::channel();
     let sender = Arc::new(RwLock::new(sender));
 
@@ -132,9 +144,8 @@ fn main() -> anyhow::Result<()> {
 
             let index_path = {
                 if let Some(path) = output_directory {
-                    match fs::create_dir_all(&path) {
-                        Ok(_) => (),
-                        Err(err) => return Err(anyhow!(format!("ERROR: create ouput dir: {err}"))),
+                    if let Err(err) = fs::create_dir_all(&path) {
+                        return Err(anyhow!("ERROR: create ouput dir: {err}"));
                     }
                     path
                 } else {
@@ -151,16 +162,15 @@ fn main() -> anyhow::Result<()> {
                 skip_paths: skip_paths.unwrap_or_default(),
             };
 
-            let err_handler = cfg.error_handler.clone();
             // Spawns a new thread to handle messages (errors/info) from the
             // indexing process.
+            let err_handler = cfg.error_handler.clone();
             let logs_handler = thread::spawn(move || {
                 let _ = handle_messages(&receiver, err_handler.clone());
             });
 
             index_documents(&cfg)?;
-            logs_handler.join().unwrap();
-            println!("Logs saved to: {log_file:?}");
+            logs_handler.join().unwrap(); // Wait for compeletion
         }
         Commands::Search {
             index_directory,
@@ -174,10 +184,8 @@ fn main() -> anyhow::Result<()> {
             };
             let mut result = search_term(&query, &index_files)?;
 
-            // i'm not really sure what i should do if
-            // I get zero matches
+            // Do nothing
             if result.is_empty() {
-                eprintln!("Zero Results");
                 return Ok(());
             }
 
@@ -187,18 +195,18 @@ fn main() -> anyhow::Result<()> {
                 result.truncate(count);
             }
 
+            let result = result
+                .iter()
+                .map(|(path, score)| {
+                    let path = path.to_string_lossy().to_string();
+                    format!("{score}: {path}")
+                })
+                .collect::<Vec<String>>();
+
             if let Some(ref f) = output_file {
-                let result = result
-                    .iter()
-                    .map(|(path, score)| {
-                        let path = path.to_string_lossy().to_string();
-                        format!("{score}: {path}")
-                    })
-                    .collect::<Vec<String>>();
-                let result = result.join("");
-                fs::write(f, result)?;
+                fs::write(f, result.join(""))?;
             } else {
-                result.iter().for_each(|(p, c)| println!("{c}: {p:?}"));
+                result.iter().for_each(|r| println!("{r}"));
             }
         }
         Commands::Serve {

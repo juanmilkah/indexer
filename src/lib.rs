@@ -62,10 +62,8 @@ pub enum Message {
 /// Type alias for a `HashMap` mapping file extensions (as `String`) to parser functions.
 /// Each parser function takes a `Path`, an `Arc<RwLock<mpsc::Sender<Message>>>`,
 /// and a slice of `String` (stop words), returning an `anyhow::Result<Vec<String>>`.
-type ExtensionToParser = HashMap<
-    String,
-    fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> anyhow::Result<Vec<String>>,
->;
+type ExtensionToParser =
+    HashMap<String, fn(&Path, Arc<RwLock<mpsc::Sender<Message>>>, &[String]) -> Vec<String>>;
 
 fn get_extensions_map() -> ExtensionToParser {
     let mut extensions_map: ExtensionToParser = HashMap::new();
@@ -258,28 +256,21 @@ fn process_doc(
     }
 
     if let Some(parser) = extensions_map.get(&ext) {
-        match parser(doc, Arc::clone(&err_sender), stop_words) {
-            Ok(tokens) => {
-                let file_size = doc.metadata().unwrap().len();
-                // do the division here to prevent u64 overflow on large directories
-                kilobytes.fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
-                indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-                if let Err(err) = model.write().unwrap().add_document(doc, &tokens) {
-                    let _ = err_sender.read().unwrap().send(Message::Error(format!(
-                        "Error adding document to model: {err}"
-                    )));
-                }
-                return;
-            }
-            Err(err) => {
-                let _ = err_sender
-                    .read()
-                    .unwrap()
-                    .send(Message::Info(format!("Skippped document: {doc:?}: {err}")));
-                return;
-            }
+        let tokens = parser(doc, Arc::clone(&err_sender), stop_words);
+        if tokens.is_empty() {
+            return;
         }
+        let file_size = doc.metadata().unwrap().len();
+        // do the division here to prevent u64 overflow on large directories
+        kilobytes.fetch_add(file_size / 1024, std::sync::atomic::Ordering::Relaxed);
+        indexed_files.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if let Err(err) = model.write().unwrap().add_document(doc, &tokens) {
+            let _ = err_sender.read().unwrap().send(Message::Error(format!(
+                "Error adding document to model: {err}"
+            )));
+        }
+        return;
     }
 
     let _ = err_sender
