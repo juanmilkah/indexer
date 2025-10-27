@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow};
-use indexer::{Config, ErrorHandler, handle_messages, index_documents, search_term};
+use indexer::{Config, ErrorHandler, Message, handle_messages, index_documents, search_term};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, mpsc};
 use std::{fs, thread};
@@ -170,6 +170,8 @@ fn main() -> anyhow::Result<()> {
             });
 
             index_documents(&cfg)?;
+            // Close the message handler incase index_documents exited early
+            let _ = Arc::clone(&cfg.sender).read().unwrap().send(Message::Break);
             logs_handler.join().unwrap(); // Wait for compeletion
         }
         Commands::Search {

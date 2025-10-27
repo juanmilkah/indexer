@@ -11,6 +11,7 @@ readme = "readme.md"
 [dependencies]
 anyhow = "1.0.97"
 bincode2 = "2.0.1"
+chrono = "0.4.42"
 clap = { version = "4.5.30", features = ["derive"] }
 csv = "1.3.1"
 home = "0.5.11"
@@ -26,11 +27,8 @@ tendril = "0.4.3"
 tiny_http = "0.11.0"
 xml = "0.8.20"
 
-# Optimizations heavily borrow from this blog
-# https://deterministic.space/high-performance-rust.html
 [profile.release]
 lto = "thin"
-codegen-units = 1
-panic = "abort"
-strip = true
+strip = "debuginfo"
+opt-level = 3
 # debug = true

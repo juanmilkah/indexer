@@ -18,7 +18,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::{Arc, RwLock, atomic::AtomicU64, mpsc},
-    time::{self, Duration, SystemTime},
+    time::{Duration, SystemTime},
 };
 
 /// Configuration for the indexing process.
@@ -358,10 +358,7 @@ pub fn handle_messages(
     error_handler: ErrorHandler,
 ) -> anyhow::Result<()> {
     while let Ok(message) = receiver.recv() {
-        let now = SystemTime::now()
-            .duration_since(time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = chrono::Local::now();
 
         let message = match message {
             Message::Break => return Ok(()),
